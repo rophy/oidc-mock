@@ -61,7 +61,7 @@ users:
 	defer os.Remove(configPath)
 
 	// Start the server with config
-	srv := exec.Command("/tmp/oidc-mock-e2e", "--config", configPath)
+	srv := exec.Command("/tmp/oidc-mock-e2e", "serve", "--config", configPath)
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start server: %v\n", err)
 		os.Exit(1)

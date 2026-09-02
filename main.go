@@ -2,7 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,17 +13,42 @@ import (
 //go:embed README.md
 var readme string
 
-func main() {
-	flag.Usage = func() { fmt.Fprint(os.Stderr, readme) }
-	configPath := flag.String("config", "", "path to config YAML file")
-	flag.Parse()
+const usage = `Usage: oidc-mock <command>
 
-	if flag.Arg(0) == "help" {
-		fmt.Print(readme)
+Commands:
+  serve   Start the OIDC mock server
+  help    Show full documentation
+
+Run "oidc-mock help" for configuration details and examples.
+`
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Print(usage)
 		os.Exit(0)
 	}
 
-	cfg, err := LoadConfig(*configPath)
+	switch os.Args[1] {
+	case "help", "--help", "-h":
+		fmt.Print(readme)
+	case "serve":
+		serve(os.Args[2:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n%s", os.Args[1], usage)
+		os.Exit(1)
+	}
+}
+
+func serve(args []string) {
+	var configPath string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--config" {
+			configPath = args[i+1]
+			break
+		}
+	}
+
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}

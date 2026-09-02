@@ -7,7 +7,7 @@ Mock OIDC provider for local development. Implements the Authorization Code flow
 ## Getting Started
 
 ```console
-$ docker run --rm -p 8080:8080 ghcr.io/rophy/oidc-mock
+$ docker run --rm -p 8080:8080 ghcr.io/rophy/oidc-mock serve
 Runtime OIDC_CONFIG:
 ---
 port: 8080
@@ -81,6 +81,7 @@ services:
     image: ghcr.io/rophy/oidc-mock:latest
     ports:
       - "8080:8080"
+    command: serve
     environment:
       OIDC_CONFIG: |
         clients:
@@ -103,6 +104,7 @@ services:
     image: ghcr.io/rophy/oidc-mock:latest
     ports:
       - "8080:8080"
+    command: serve
     volumes:
       - ./config.yaml:/config.yaml
     environment:
@@ -112,8 +114,8 @@ services:
 ## Building from source
 
 ```bash
-go run .
-go run . --config config.yaml
+go run . serve
+go run . serve --config config.yaml
 ```
 
 Image published to `ghcr.io/rophy/oidc-mock`, tagged `latest` and `yyyymmdd-<hash>` on each push to master.
