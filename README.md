@@ -1,8 +1,8 @@
 # oidc-mock
 
-Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker instead of a login form.
+Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker UI and optional password protection per user.
 
-**Supported features:** PKCE (S256/plain), refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation, RP-Initiated Logout, `at_hash`/`email_verified` claims.
+**Supported features:** optional per-user passwords, PKCE (S256/plain), refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation, RP-Initiated Logout, `at_hash`/`email_verified` claims.
 
 ## Getting Started
 
@@ -44,7 +44,9 @@ Override defaults (see Getting Started) using exactly one of:
 
 Setting more than one is an error. `OIDC_PORT` overrides the port independently.
 
-Any key in a user object beyond `sub`, `email`, and `name` becomes a custom claim in the ID token and `/userinfo` response (requires `profile` scope).
+Any key in a user object beyond `sub`, `email`, `name`, and `password` becomes a custom claim in the ID token and `/userinfo` response (requires `profile` scope).
+
+Users with a `password` field require password entry after selection. Users without it log in with a single click.
 
 ### Scopes
 

@@ -1,17 +1,28 @@
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
 
+//go:embed README.md
+var readme string
+
 func main() {
+	flag.Usage = func() { fmt.Fprint(os.Stderr, readme) }
 	configPath := flag.String("config", "", "path to config YAML file")
 	flag.Parse()
+
+	if flag.Arg(0) == "help" {
+		fmt.Print(readme)
+		os.Exit(0)
+	}
 
 	cfg, err := LoadConfig(*configPath)
 	if err != nil {

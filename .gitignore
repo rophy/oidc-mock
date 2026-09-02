@@ -1,1 +1,3 @@
 oidc-mock
+test/llm/logs/*
+!test/llm/logs/.gitkeep
