@@ -1120,3 +1120,109 @@ func TestEndSessionEndpoint_NoRedirect(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
+func newTestServerWithPassword(t *testing.T) *Server {
+	t.Helper()
+	srv := newTestServer(t)
+	srv.Config.Users = []User{
+		{Sub: "user1", Email: "alice@example.com", Name: "Alice", Password: "secret123"},
+		{Sub: "user2", Email: "bob@example.com", Name: "Bob"},
+	}
+	return srv
+}
+
+func TestAuthorizeCallback_NoPassword_StillWorks(t *testing.T) {
+	srv := newTestServerWithPassword(t)
+
+	form := strings.NewReader("sub=user2&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	u, _ := url.Parse(loc)
+	if u.Query().Get("code") == "" {
+		t.Error("expected code in redirect for passwordless user")
+	}
+}
+
+func TestAuthorizeCallback_PasswordRequired_ShowsForm(t *testing.T) {
+	srv := newTestServerWithPassword(t)
+
+	form := strings.NewReader("sub=user1&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (password form), got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "password") {
+		t.Error("expected password input in response")
+	}
+	if !strings.Contains(body, "Alice") {
+		t.Error("expected user name in password form")
+	}
+}
+
+func TestAuthorizeCallback_WrongPassword(t *testing.T) {
+	srv := newTestServerWithPassword(t)
+
+	form := strings.NewReader("sub=user1&password=wrong&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (password form with error), got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Invalid password") {
+		t.Error("expected error message for wrong password")
+	}
+}
+
+func TestAuthorizeCallback_CorrectPassword(t *testing.T) {
+	srv := newTestServerWithPassword(t)
+
+	form := strings.NewReader("sub=user1&password=secret123&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	u, _ := url.Parse(loc)
+	if u.Query().Get("code") == "" {
+		t.Error("expected code in redirect after correct password")
+	}
+}
+
+func TestAuthorizeCallback_UnknownUser(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("sub=nonexistent&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}

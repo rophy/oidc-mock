@@ -20,6 +20,19 @@ import (
 var templateFS embed.FS
 
 var pickerTmpl = template.Must(template.ParseFS(templateFS, "templates/picker.html"))
+var passwordTmpl = template.Must(template.ParseFS(templateFS, "templates/password.html"))
+
+type passwordData struct {
+	User                User
+	ClientID            string
+	RedirectURI         string
+	State               string
+	Nonce               string
+	Scope               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	Error               string
+}
 
 type Server struct {
 	Config  Config
@@ -134,6 +147,45 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 	scope := r.FormValue("scope")
 	codeChallenge := r.FormValue("code_challenge")
 	codeChallengeMethod := r.FormValue("code_challenge_method")
+
+	user := s.findUser(sub)
+	if user == nil {
+		http.Error(w, "unknown user", http.StatusBadRequest)
+		return
+	}
+
+	if user.Password != "" {
+		password := r.FormValue("password")
+		if password == "" {
+			w.Header().Set("Content-Type", "text/html")
+			passwordTmpl.Execute(w, passwordData{
+				User:                *user,
+				ClientID:            clientID,
+				RedirectURI:         redirectURI,
+				State:               state,
+				Nonce:               nonce,
+				Scope:               scope,
+				CodeChallenge:       codeChallenge,
+				CodeChallengeMethod: codeChallengeMethod,
+			})
+			return
+		}
+		if password != user.Password {
+			w.Header().Set("Content-Type", "text/html")
+			passwordTmpl.Execute(w, passwordData{
+				User:                *user,
+				ClientID:            clientID,
+				RedirectURI:         redirectURI,
+				State:               state,
+				Nonce:               nonce,
+				Scope:               scope,
+				CodeChallenge:       codeChallenge,
+				CodeChallengeMethod: codeChallengeMethod,
+				Error:               "Invalid password",
+			})
+			return
+		}
+	}
 
 	code := GenerateRandomString(16)
 	s.Store.SaveAuthCode(code, AuthCodeData{

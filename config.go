@@ -21,10 +21,11 @@ type Client struct {
 }
 
 type User struct {
-	Sub    string         `yaml:"sub"`
-	Email  string         `yaml:"email"`
-	Name   string         `yaml:"name"`
-	Claims map[string]any `yaml:",inline"`
+	Sub      string         `yaml:"sub"`
+	Email    string         `yaml:"email"`
+	Name     string         `yaml:"name"`
+	Password string         `yaml:"password,omitempty"`
+	Claims   map[string]any `yaml:",inline"`
 }
 
 func DefaultConfig() Config {
