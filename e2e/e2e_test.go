@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -42,6 +44,9 @@ clients:
     secret: secret
     redirect_uris:
       - %s
+  - id: public-cli
+    redirect_uris:
+      - %s
 users:
   - sub: user1
     email: alice@example.com
@@ -51,7 +56,7 @@ users:
     email: bob@example.com
     name: Bob
     roles: [viewer]
-`, baseURL, redirectURI)
+`, baseURL, redirectURI, redirectURI)
 
 	configPath := filepath.Join(os.TempDir(), "oidc-mock-e2e-config.yaml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
@@ -298,5 +303,87 @@ func TestInvalidRedirectURIShowsError(t *testing.T) {
 	}
 	if !strings.Contains(content, "invalid redirect_uri") {
 		t.Errorf("expected error message about invalid redirect_uri, got: %s", content)
+	}
+}
+
+func TestPublicClientPKCEFlow(t *testing.T) {
+	page, err := browser.NewPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Close()
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	h := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(h[:])
+
+	authParams := url.Values{
+		"client_id":             {"public-cli"},
+		"redirect_uri":          {redirectURI},
+		"response_type":         {"code"},
+		"scope":                 {"openid email profile"},
+		"state":                 {"teststate"},
+		"nonce":                 {"testnonce"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	_, err = page.Goto(baseURL + "/authorize?" + authParams.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Click Alice's card
+	aliceButton := page.Locator("button.user-card:has-text('Alice')")
+	if err := aliceButton.Click(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for redirect to callback with code
+	if err := page.WaitForURL("**/callback**"); err != nil {
+		t.Fatal(err)
+	}
+
+	currentURL := page.URL()
+	parsed, err := url.Parse(currentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatalf("expected code in URL, got: %s", currentURL)
+	}
+
+	// Exchange code — no client_secret, only PKCE verifier
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {"public-cli"},
+		"redirect_uri":  {redirectURI},
+		"code_verifier": {verifier},
+	}
+	resp, err := http.PostForm(baseURL+"/token", tokenForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token exchange: expected 200, got %d", resp.StatusCode)
+	}
+
+	var tokenResp map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		t.Fatal(err)
+	}
+
+	if tokenResp["id_token"] == nil || tokenResp["id_token"] == "" {
+		t.Error("expected non-empty id_token")
+	}
+	if tokenResp["access_token"] == nil || tokenResp["access_token"] == "" {
+		t.Error("expected non-empty access_token")
+	}
+	if tokenResp["token_type"] != "Bearer" {
+		t.Errorf("expected token_type=Bearer, got %v", tokenResp["token_type"])
 	}
 }

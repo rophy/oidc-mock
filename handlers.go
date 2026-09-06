@@ -54,7 +54,7 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"scopes_supported":                      []string{"openid", "email", "profile", "offline_access"},
 		"revocation_endpoint":                   s.Config.Issuer + "/revoke",
 		"end_session_endpoint":                  s.Config.Issuer + "/end-session",
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
 		"claims_supported":                      []string{"sub", "iss", "aud", "exp", "iat", "nonce", "email", "email_verified", "name", "at_hash"},
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
 	}
@@ -242,7 +242,12 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := s.findClient(clientID)
-	if client == nil || client.Secret != clientSecret {
+	if client == nil {
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
+	isPublicClient := client.Secret == ""
+	if !isPublicClient && client.Secret != clientSecret {
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
@@ -260,6 +265,10 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if codeData.ClientID != clientID || codeData.RedirectURI != redirectURI {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
+		}
+		if isPublicClient && codeData.CodeChallenge == "" {
 			jsonError(w, "invalid_grant", http.StatusBadRequest)
 			return
 		}
