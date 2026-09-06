@@ -54,7 +54,7 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"scopes_supported":                      []string{"openid", "email", "profile", "offline_access"},
 		"revocation_endpoint":                   s.Config.Issuer + "/revoke",
 		"end_session_endpoint":                  s.Config.Issuer + "/end-session",
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
 		"claims_supported":                      []string{"sub", "iss", "aud", "exp", "iat", "nonce", "email", "email_verified", "name", "at_hash"},
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
 	}
@@ -118,6 +118,10 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	if codeChallenge != "" && codeChallengeMethod == "" {
 		codeChallengeMethod = "plain"
+	}
+	if client.Secret == "" && codeChallenge != "" && codeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
+		http.Error(w, "public clients must use S256 code_challenge_method", http.StatusBadRequest)
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -242,7 +246,16 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := s.findClient(clientID)
-	if client == nil || client.Secret != clientSecret {
+	if client == nil {
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
+	isPublicClient := client.Secret == ""
+	if isPublicClient && (basicOk || r.Form.Has("client_secret")) {
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
+	if !isPublicClient && client.Secret != clientSecret {
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
@@ -254,7 +267,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		code := r.FormValue("code")
 		redirectURI := r.FormValue("redirect_uri")
 
-		codeData, ok := s.Store.ConsumeAuthCode(code)
+		codeData, ok := s.Store.GetAuthCode(code)
 		if !ok {
 			jsonError(w, "invalid_grant", http.StatusBadRequest)
 			return
@@ -263,9 +276,17 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "invalid_grant", http.StatusBadRequest)
 			return
 		}
+		if isPublicClient && codeData.CodeChallenge == "" {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
+		}
+		if isPublicClient && codeData.CodeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
+		}
 		if codeData.CodeChallenge != "" {
 			codeVerifier := r.FormValue("code_verifier")
-			if codeVerifier == "" {
+			if codeVerifier == "" || !validCodeVerifier(codeVerifier) {
 				jsonError(w, "invalid_grant", http.StatusBadRequest)
 				return
 			}
@@ -273,6 +294,11 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, "invalid_grant", http.StatusBadRequest)
 				return
 			}
+		}
+		// Atomically consume to prevent concurrent redemption
+		if _, ok := s.Store.ConsumeAuthCode(code); !ok {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
 		}
 		userSub = codeData.UserSub
 		nonce = codeData.Nonce
@@ -477,6 +503,18 @@ func jsonError(w http.ResponseWriter, errCode string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": errCode})
+}
+
+func validCodeVerifier(v string) bool {
+	if len(v) < 43 || len(v) > 128 {
+		return false
+	}
+	for _, c := range v {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~') {
+			return false
+		}
+	}
+	return true
 }
 
 func verifyPKCE(challenge, method, verifier string) bool {

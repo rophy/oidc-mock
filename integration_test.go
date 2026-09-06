@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -330,5 +332,169 @@ func TestFullAuthCodeFlow_WithPassword(t *testing.T) {
 	}
 	if userInfo["email"] != "alice@example.com" {
 		t.Errorf("userinfo email: expected alice@example.com, got %v", userInfo["email"])
+	}
+}
+
+func TestFullAuthCodeFlow_PublicClient_PKCE(t *testing.T) {
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.Clients = append(cfg.Clients, Client{
+		ID:           "public-cli",
+		RedirectURIs: []string{"http://127.0.0.1:43212/callback"},
+	})
+	srv := &Server{
+		Config:  cfg,
+		KeyPair: kp,
+		Store:   NewStore(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/openid-configuration", srv.HandleDiscovery)
+	mux.HandleFunc("GET /authorize", srv.HandleAuthorize)
+	mux.HandleFunc("POST /authorize/callback", srv.HandleAuthorizeCallback)
+	mux.HandleFunc("POST /token", srv.HandleToken)
+	mux.HandleFunc("GET /jwks", srv.HandleJWKS)
+	mux.HandleFunc("GET /userinfo", srv.HandleUserinfo)
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	srv.Config.Issuer = ts.URL
+	srv.Config.Clients[1].RedirectURIs = []string{ts.URL + "/callback"}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	h := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(h[:])
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	// Step 1: Hit /authorize with PKCE params
+	authURL := ts.URL + "/authorize?client_id=public-cli&redirect_uri=" + url.QueryEscape(ts.URL+"/callback") +
+		"&response_type=code&scope=openid+email+profile+offline_access&state=teststate&nonce=testnonce" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256"
+	resp, err := http.Get(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authorize: expected 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Step 2: POST /authorize/callback with PKCE params
+	formData := url.Values{
+		"sub":                   {"user1"},
+		"client_id":             {"public-cli"},
+		"redirect_uri":          {ts.URL + "/callback"},
+		"state":                 {"teststate"},
+		"nonce":                 {"testnonce"},
+		"scope":                 {"openid email profile offline_access"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	resp, err = client.PostForm(ts.URL+"/authorize/callback", formData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback: expected 302, got %d", resp.StatusCode)
+	}
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("expected code in redirect")
+	}
+
+	// Step 3: Exchange code — no client_secret, just PKCE verifier
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {"public-cli"},
+		"redirect_uri":  {ts.URL + "/callback"},
+		"code_verifier": {verifier},
+	}
+	resp, err = http.PostForm(ts.URL+"/token", tokenForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token: expected 200, got %d", resp.StatusCode)
+	}
+
+	var tokenResp map[string]any
+	json.NewDecoder(resp.Body).Decode(&tokenResp)
+	resp.Body.Close()
+
+	idTokenStr, ok := tokenResp["id_token"].(string)
+	if !ok || idTokenStr == "" {
+		t.Fatal("expected id_token in response")
+	}
+	accessToken, ok := tokenResp["access_token"].(string)
+	if !ok || accessToken == "" {
+		t.Fatal("expected access_token in response")
+	}
+
+	// Step 4: Verify ID token
+	parsed, err := jwt.Parse(idTokenStr, func(token *jwt.Token) (any, error) {
+		return &kp.PrivateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse id_token: %v", err)
+	}
+	claims := parsed.Claims.(jwt.MapClaims)
+	if claims["sub"] != "user1" {
+		t.Errorf("expected sub=user1, got %v", claims["sub"])
+	}
+
+	// Step 5: Verify access token works with /userinfo
+	req, _ := http.NewRequest("GET", ts.URL+"/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("userinfo: expected 200, got %d", resp.StatusCode)
+	}
+	var userInfo map[string]any
+	json.NewDecoder(resp.Body).Decode(&userInfo)
+	resp.Body.Close()
+
+	if userInfo["sub"] != "user1" {
+		t.Errorf("userinfo sub: expected user1, got %v", userInfo["sub"])
+	}
+	if userInfo["email"] != "alice@example.com" {
+		t.Errorf("userinfo email: expected alice@example.com, got %v", userInfo["email"])
+	}
+
+	// Step 6: Refresh token — no client_secret needed for public client
+	refreshToken, ok := tokenResp["refresh_token"].(string)
+	if !ok || refreshToken == "" {
+		t.Fatal("expected refresh_token in token response")
+	}
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {"public-cli"},
+	}
+	resp, err = http.PostForm(ts.URL+"/token", refreshForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: expected 200, got %d", resp.StatusCode)
+	}
+	var refreshResp map[string]any
+	json.NewDecoder(resp.Body).Decode(&refreshResp)
+	resp.Body.Close()
+
+	newAccessToken, ok := refreshResp["access_token"].(string)
+	if !ok || newAccessToken == "" {
+		t.Fatal("expected new access_token from refresh")
 	}
 }

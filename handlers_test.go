@@ -144,6 +144,22 @@ func TestAuthorizeEndpoint_RendersPicker(t *testing.T) {
 	}
 }
 
+func TestAuthorizeEndpoint_InvalidRedirectURI(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://evil.com/callback&response_type=code&scope=openid", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "invalid redirect_uri") {
+		t.Error("expected error message about invalid redirect_uri")
+	}
+}
+
 func TestAuthorizeEndpoint_InvalidResponseType(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -426,6 +442,45 @@ func TestTokenEndpoint_CodeAlreadyConsumed(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_RedirectURIMismatch(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("code1", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Nonce:       "n",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=code1&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/other")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for redirect_uri mismatch, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_UnsupportedGrantType(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("grant_type=client_credentials&client_id=default&client_secret=secret")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unsupported grant_type, got %d", w.Code)
+	}
+}
+
 func TestTokenEndpoint_BasicAuth(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -670,7 +725,7 @@ func TestTokenEndpoint_PKCE_S256_WrongVerifier(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier")
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -685,7 +740,7 @@ func TestTokenEndpoint_PKCE_S256_WrongVerifier(t *testing.T) {
 func TestTokenEndpoint_PKCE_Plain(t *testing.T) {
 	srv := newTestServer(t)
 
-	verifier := "plainverifier123"
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
 
 	srv.Store.SaveAuthCode("pkcecode", AuthCodeData{
 		UserSub:             "user1",
@@ -736,6 +791,115 @@ func TestTokenEndpoint_PKCE_MissingVerifier(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_ConcurrentRedemption(t *testing.T) {
+	srv := newTestServer(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("race-code", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	results := make(chan int, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			form := strings.NewReader("grant_type=authorization_code&code=race-code&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=" + verifier)
+			req := httptest.NewRequest("POST", "/token", form)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			srv.HandleToken(w, req)
+			results <- w.Code
+		}()
+	}
+
+	successCount := 0
+	for i := 0; i < 10; i++ {
+		code := <-results
+		if code == http.StatusOK {
+			successCount++
+		}
+	}
+
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 successful redemption, got %d", successCount)
+	}
+}
+
+func TestTokenEndpoint_CodeNotConsumedOnValidationFailure(t *testing.T) {
+	srv := newTestServer(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("mycode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// First attempt: wrong verifier — should fail but NOT consume the code
+	form := strings.NewReader("grant_type=authorization_code&code=mycode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for wrong verifier, got %d", w.Code)
+	}
+
+	// Second attempt: correct verifier — should succeed because code was not consumed
+	form = strings.NewReader("grant_type=authorization_code&code=mycode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=" + verifier)
+	req = httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on retry with correct verifier, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTokenEndpoint_PKCE_InvalidVerifierFormat(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("pkcecode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// Too short (< 43 chars)
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=tooshort")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for short verifier, got %d", w.Code)
+	}
+}
+
 func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -750,7 +914,7 @@ func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=somechallenge")
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=somechallenge-padded-to-43-chars-abcdefghij")
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -759,6 +923,262 @@ func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func newTestServerWithPublicClient(t *testing.T) *Server {
+	t.Helper()
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.Clients = append(cfg.Clients, Client{
+		ID:           "public-cli",
+		Secret:       "",
+		RedirectURIs: []string{"http://127.0.0.1:43212/callback"},
+	})
+	return &Server{
+		Config:  cfg,
+		KeyPair: kp,
+		Store:   NewStore(),
+	}
+}
+
+func TestTokenEndpoint_PublicClient_PKCE_S256(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTokenEndpoint_PublicClient_NoPKCE_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "public-cli",
+		RedirectURI: "http://127.0.0.1:43212/callback",
+		Nonce:       "n",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client without PKCE, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_WrongVerifier_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_SecretRejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// Public client must not send client_secret
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&client_secret=anything&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for public client with client_secret, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_BasicAuthRejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// Public client must not use Basic auth
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("public-cli", "")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for public client with Basic auth, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_RefreshToken(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	srv.Store.SaveRefreshToken("pub-rt", RefreshTokenData{
+		UserSub:  "user1",
+		ClientID: "public-cli",
+		Scope:    "openid offline_access",
+	})
+
+	form := strings.NewReader("grant_type=refresh_token&refresh_token=pub-rt&client_id=public-cli")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTokenEndpoint_PublicClient_PlainPKCE_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       verifier,
+		CodeChallengeMethod: "plain",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client with plain PKCE, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_PlainPKCE_AllowedWithConfig(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+	for i := range srv.Config.Clients {
+		if srv.Config.Clients[i].ID == "public-cli" {
+			srv.Config.Clients[i].AllowPlainCodeChallenge = true
+		}
+	}
+
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       verifier,
+		CodeChallengeMethod: "plain",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for public client with plain PKCE when allowed, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthorize_PublicClient_PlainPKCE_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&response_type=code&scope=openid&code_challenge=somechallenge&code_challenge_method=plain", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client with plain code_challenge, got %d", w.Code)
 	}
 }
 
@@ -1105,6 +1525,23 @@ func TestEndSessionEndpoint_Redirect(t *testing.T) {
 	}
 	if loc.Query().Get("state") != "abc" {
 		t.Errorf("expected state=abc in redirect, got %s", loc.Query().Get("state"))
+	}
+}
+
+func TestEndSessionEndpoint_RedirectWithoutState(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:3000/logged-out", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleEndSession(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "http://localhost:3000/logged-out" {
+		t.Errorf("expected redirect to logout URI without state, got %s", loc)
 	}
 }
 

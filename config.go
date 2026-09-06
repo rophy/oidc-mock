@@ -15,9 +15,10 @@ type Config struct {
 }
 
 type Client struct {
-	ID           string   `yaml:"id"`
-	Secret       string   `yaml:"secret"`
-	RedirectURIs []string `yaml:"redirect_uris"`
+	ID                    string   `yaml:"id"`
+	Secret                string   `yaml:"secret"`
+	RedirectURIs          []string `yaml:"redirect_uris"`
+	AllowPlainCodeChallenge bool   `yaml:"allow_plain_code_challenge"`
 }
 
 type User struct {
