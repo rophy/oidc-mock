@@ -119,6 +119,10 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if codeChallenge != "" && codeChallengeMethod == "" {
 		codeChallengeMethod = "plain"
 	}
+	if client.Secret == "" && codeChallenge != "" && codeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
+		http.Error(w, "public clients must use S256 code_challenge_method", http.StatusBadRequest)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html")
 	pickerTmpl.Execute(w, pickerData{
@@ -273,6 +277,10 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if isPublicClient && codeData.CodeChallenge == "" {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
+		}
+		if isPublicClient && codeData.CodeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
 			jsonError(w, "invalid_grant", http.StatusBadRequest)
 			return
 		}

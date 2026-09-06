@@ -944,6 +944,80 @@ func TestTokenEndpoint_PublicClient_RefreshToken(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_PublicClient_PlainPKCE_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "plainverifier123"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       verifier,
+		CodeChallengeMethod: "plain",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client with plain PKCE, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_PlainPKCE_AllowedWithConfig(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+	for i := range srv.Config.Clients {
+		if srv.Config.Clients[i].ID == "public-cli" {
+			srv.Config.Clients[i].AllowPlainCodeChallenge = true
+		}
+	}
+
+	verifier := "plainverifier123"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       verifier,
+		CodeChallengeMethod: "plain",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for public client with plain PKCE when allowed, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthorize_PublicClient_PlainPKCE_Rejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&response_type=code&scope=openid&code_challenge=somechallenge&code_challenge_method=plain", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client with plain code_challenge, got %d", w.Code)
+	}
+}
+
 func TestUserinfoEndpoint_POST(t *testing.T) {
 	srv := newTestServer(t)
 
