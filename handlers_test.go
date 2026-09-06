@@ -144,6 +144,22 @@ func TestAuthorizeEndpoint_RendersPicker(t *testing.T) {
 	}
 }
 
+func TestAuthorizeEndpoint_InvalidRedirectURI(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://evil.com/callback&response_type=code&scope=openid", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "invalid redirect_uri") {
+		t.Error("expected error message about invalid redirect_uri")
+	}
+}
+
 func TestAuthorizeEndpoint_InvalidResponseType(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -423,6 +439,45 @@ func TestTokenEndpoint_CodeAlreadyConsumed(t *testing.T) {
 	w2 := makeReq()
 	if w2.Code != http.StatusBadRequest {
 		t.Errorf("second exchange: expected 400, got %d", w2.Code)
+	}
+}
+
+func TestTokenEndpoint_RedirectURIMismatch(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("code1", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Nonce:       "n",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=code1&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/other")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for redirect_uri mismatch, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_UnsupportedGrantType(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("grant_type=client_credentials&client_id=default&client_secret=secret")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unsupported grant_type, got %d", w.Code)
 	}
 }
 
@@ -1361,6 +1416,23 @@ func TestEndSessionEndpoint_Redirect(t *testing.T) {
 	}
 	if loc.Query().Get("state") != "abc" {
 		t.Errorf("expected state=abc in redirect, got %s", loc.Query().Get("state"))
+	}
+}
+
+func TestEndSessionEndpoint_RedirectWithoutState(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:3000/logged-out", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleEndSession(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "http://localhost:3000/logged-out" {
+		t.Errorf("expected redirect to logout URI without state, got %s", loc)
 	}
 }
 
