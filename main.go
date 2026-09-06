@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -87,13 +88,19 @@ func serve(args []string) {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	shutdownDone := make(chan error, 1)
 	go func() {
 		<-quit
 		log.Println("shutting down...")
-		server.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		shutdownDone <- server.Shutdown(ctx)
 	}()
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+	if err := <-shutdownDone; err != nil {
+		log.Printf("HTTP server shutdown: %v", err)
 	}
 }
