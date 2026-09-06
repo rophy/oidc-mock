@@ -862,7 +862,7 @@ func TestTokenEndpoint_PublicClient_WrongVerifier_Rejected(t *testing.T) {
 	}
 }
 
-func TestTokenEndpoint_PublicClient_SecretIgnored(t *testing.T) {
+func TestTokenEndpoint_PublicClient_SecretRejected(t *testing.T) {
 	srv := newTestServerWithPublicClient(t)
 
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -879,7 +879,7 @@ func TestTokenEndpoint_PublicClient_SecretIgnored(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	// Public client sending a client_secret should still succeed (secret is ignored)
+	// Public client must not send client_secret
 	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&client_secret=anything&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -887,8 +887,39 @@ func TestTokenEndpoint_PublicClient_SecretIgnored(t *testing.T) {
 
 	srv.HandleToken(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for public client with client_secret, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_BasicAuthRejected(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// Public client must not use Basic auth
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("public-cli", "")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for public client with Basic auth, got %d", w.Code)
 	}
 }
 

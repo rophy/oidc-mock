@@ -247,6 +247,10 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isPublicClient := client.Secret == ""
+	if isPublicClient && (basicOk || r.Form.Has("client_secret")) {
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
 	if !isPublicClient && client.Secret != clientSecret {
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
