@@ -17,7 +17,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - run: go test -v ./...
+      - name: Run unit tests
+        id: coverage
+        run: |
+          make unit-test 2>&1 | tee /tmp/test-output.log
+          pct=$(grep -oP 'coverage: \K[0-9.]+' /tmp/test-output.log | tail -1)
+          echo "value=$pct" >> "$GITHUB_OUTPUT"
+      - name: Update coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: dbb4822dbc5782d5563947adde3358d3
+          filename: oidc-mock-coverage.json
+          label: coverage
+          message: ${{ steps.coverage.outputs.value }}%
+          valColorRange: ${{ steps.coverage.outputs.value }}
+          minColorRange: 50
+          maxColorRange: 100
 
   e2e:
     needs: test
@@ -28,7 +45,7 @@ jobs:
         with:
           go-version: "1.24"
       - run: go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6201.1 install --with-deps chromium
-      - run: go test -tags e2e -v -timeout 60s ./e2e/
+      - run: make e2e-test
 
   build-image:
     needs: test

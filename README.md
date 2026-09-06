@@ -1,5 +1,8 @@
 # oidc-mock
 
+[![CI](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml/badge.svg)](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/rophy/dbb4822dbc5782d5563947adde3358d3/raw/oidc-mock-coverage.json)](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml)
+
 Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker UI and optional password protection per user.
 
 **Supported features:** optional per-user passwords, PKCE (S256/plain), refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation, RP-Initiated Logout, `at_hash`/`email_verified` claims.
