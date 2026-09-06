@@ -62,6 +62,22 @@ func (s *Store) ConsumeAuthCode(code string) (AuthCodeData, bool) {
 	return data, true
 }
 
+func (s *Store) GetAuthCode(code string) (AuthCodeData, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, ok := s.authCodes[code]
+	if !ok || time.Now().After(data.ExpiresAt) {
+		return AuthCodeData{}, false
+	}
+	return data, true
+}
+
+func (s *Store) DeleteAuthCode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.authCodes, code)
+}
+
 func (s *Store) SaveAccessToken(token string, data AccessTokenData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

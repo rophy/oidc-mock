@@ -725,7 +725,7 @@ func TestTokenEndpoint_PKCE_S256_WrongVerifier(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier")
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -740,7 +740,7 @@ func TestTokenEndpoint_PKCE_S256_WrongVerifier(t *testing.T) {
 func TestTokenEndpoint_PKCE_Plain(t *testing.T) {
 	srv := newTestServer(t)
 
-	verifier := "plainverifier123"
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
 
 	srv.Store.SaveAuthCode("pkcecode", AuthCodeData{
 		UserSub:             "user1",
@@ -791,6 +791,73 @@ func TestTokenEndpoint_PKCE_MissingVerifier(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_CodeNotConsumedOnValidationFailure(t *testing.T) {
+	srv := newTestServer(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("mycode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// First attempt: wrong verifier — should fail but NOT consume the code
+	form := strings.NewReader("grant_type=authorization_code&code=mycode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for wrong verifier, got %d", w.Code)
+	}
+
+	// Second attempt: correct verifier — should succeed because code was not consumed
+	form = strings.NewReader("grant_type=authorization_code&code=mycode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=" + verifier)
+	req = httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on retry with correct verifier, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTokenEndpoint_PKCE_InvalidVerifierFormat(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("pkcecode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	// Too short (< 43 chars)
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=tooshort")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for short verifier, got %d", w.Code)
+	}
+}
+
 func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -805,7 +872,7 @@ func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=somechallenge")
+	form := strings.NewReader("grant_type=authorization_code&code=pkcecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=somechallenge-padded-to-43-chars-abcdefghij")
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -905,7 +972,7 @@ func TestTokenEndpoint_PublicClient_WrongVerifier_Rejected(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=wrong-verifier")
+	form := strings.NewReader("grant_type=authorization_code&code=pubcode&client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=wrong-verifier-padded-to-43-chars-abcdefghijklm")
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1002,7 +1069,7 @@ func TestTokenEndpoint_PublicClient_RefreshToken(t *testing.T) {
 func TestTokenEndpoint_PublicClient_PlainPKCE_Rejected(t *testing.T) {
 	srv := newTestServerWithPublicClient(t)
 
-	verifier := "plainverifier123"
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
 
 	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
 		UserSub:             "user1",
@@ -1035,7 +1102,7 @@ func TestTokenEndpoint_PublicClient_PlainPKCE_AllowedWithConfig(t *testing.T) {
 		}
 	}
 
-	verifier := "plainverifier123"
+	verifier := "plainverifier1234567890abcdefghijklmnopqrstuvwx"
 
 	srv.Store.SaveAuthCode("pubcode", AuthCodeData{
 		UserSub:             "user1",

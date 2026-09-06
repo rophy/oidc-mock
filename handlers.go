@@ -267,7 +267,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		code := r.FormValue("code")
 		redirectURI := r.FormValue("redirect_uri")
 
-		codeData, ok := s.Store.ConsumeAuthCode(code)
+		codeData, ok := s.Store.GetAuthCode(code)
 		if !ok {
 			jsonError(w, "invalid_grant", http.StatusBadRequest)
 			return
@@ -286,7 +286,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		}
 		if codeData.CodeChallenge != "" {
 			codeVerifier := r.FormValue("code_verifier")
-			if codeVerifier == "" {
+			if codeVerifier == "" || !validCodeVerifier(codeVerifier) {
 				jsonError(w, "invalid_grant", http.StatusBadRequest)
 				return
 			}
@@ -295,6 +295,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		s.Store.DeleteAuthCode(code)
 		userSub = codeData.UserSub
 		nonce = codeData.Nonce
 		scope = codeData.Scope
@@ -498,6 +499,18 @@ func jsonError(w http.ResponseWriter, errCode string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": errCode})
+}
+
+func validCodeVerifier(v string) bool {
+	if len(v) < 43 || len(v) > 128 {
+		return false
+	}
+	for _, c := range v {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~') {
+			return false
+		}
+	}
+	return true
 }
 
 func verifyPKCE(challenge, method, verifier string) bool {

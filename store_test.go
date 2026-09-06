@@ -99,6 +99,52 @@ func TestRevokeAccessToken(t *testing.T) {
 	}
 }
 
+func TestGetAuthCode(t *testing.T) {
+	s := NewStore()
+
+	s.SaveAuthCode("code1", AuthCodeData{
+		UserSub:   "user1",
+		ClientID:  "app",
+		ExpiresAt: time.Now().Add(60 * time.Second),
+	})
+
+	// GetAuthCode does not consume
+	data, ok := s.GetAuthCode("code1")
+	if !ok {
+		t.Fatal("expected to find auth code")
+	}
+	if data.UserSub != "user1" {
+		t.Errorf("expected user1, got %s", data.UserSub)
+	}
+
+	// Still available after Get
+	_, ok = s.GetAuthCode("code1")
+	if !ok {
+		t.Fatal("expected auth code to still exist after GetAuthCode")
+	}
+
+	// DeleteAuthCode removes it
+	s.DeleteAuthCode("code1")
+	_, ok = s.GetAuthCode("code1")
+	if ok {
+		t.Fatal("expected auth code to be deleted")
+	}
+}
+
+func TestGetAuthCode_Expired(t *testing.T) {
+	s := NewStore()
+
+	s.SaveAuthCode("expired", AuthCodeData{
+		UserSub:   "user1",
+		ExpiresAt: time.Now().Add(-1 * time.Second),
+	})
+
+	_, ok := s.GetAuthCode("expired")
+	if ok {
+		t.Fatal("expected expired auth code to be rejected")
+	}
+}
+
 func TestRevokeNonexistentTokens(t *testing.T) {
 	s := NewStore()
 
