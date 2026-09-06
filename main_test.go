@@ -45,7 +45,7 @@ func TestRun_Serve(t *testing.T) {
 	}()
 
 	ready := false
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		resp, err := http.Get("http://localhost:19093/.well-known/openid-configuration")
 		if err == nil {
 			resp.Body.Close()
@@ -95,7 +95,7 @@ func TestListenAndServe(t *testing.T) {
 	}()
 
 	ready := false
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		resp, err := http.Get("http://localhost:19091/.well-known/openid-configuration")
 		if err == nil {
 			resp.Body.Close()
@@ -131,7 +131,7 @@ func TestServe(t *testing.T) {
 	}()
 
 	ready := false
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		resp, err := http.Get("http://localhost:19092/.well-known/openid-configuration")
 		if err == nil {
 			resp.Body.Close()

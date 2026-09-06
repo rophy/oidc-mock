@@ -72,12 +72,6 @@ func (s *Store) GetAuthCode(code string) (AuthCodeData, bool) {
 	return data, true
 }
 
-func (s *Store) DeleteAuthCode(code string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.authCodes, code)
-}
-
 func (s *Store) SaveAccessToken(token string, data AccessTokenData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

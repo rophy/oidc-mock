@@ -117,17 +117,20 @@ func TestGetAuthCode(t *testing.T) {
 		t.Errorf("expected user1, got %s", data.UserSub)
 	}
 
-	// Still available after Get
+	// Still available after Get (non-consuming)
 	_, ok = s.GetAuthCode("code1")
 	if !ok {
 		t.Fatal("expected auth code to still exist after GetAuthCode")
 	}
 
-	// DeleteAuthCode removes it
-	s.DeleteAuthCode("code1")
+	// ConsumeAuthCode removes it atomically
+	_, ok = s.ConsumeAuthCode("code1")
+	if !ok {
+		t.Fatal("expected to consume auth code")
+	}
 	_, ok = s.GetAuthCode("code1")
 	if ok {
-		t.Fatal("expected auth code to be deleted")
+		t.Fatal("expected auth code to be consumed")
 	}
 }
 

@@ -791,6 +791,48 @@ func TestTokenEndpoint_PKCE_MissingVerifier(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_ConcurrentRedemption(t *testing.T) {
+	srv := newTestServer(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("race-code", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "default",
+		RedirectURI:         "http://localhost:8080/callback",
+		Nonce:               "n",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	results := make(chan int, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			form := strings.NewReader("grant_type=authorization_code&code=race-code&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=" + verifier)
+			req := httptest.NewRequest("POST", "/token", form)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			srv.HandleToken(w, req)
+			results <- w.Code
+		}()
+	}
+
+	successCount := 0
+	for i := 0; i < 10; i++ {
+		code := <-results
+		if code == http.StatusOK {
+			successCount++
+		}
+	}
+
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 successful redemption, got %d", successCount)
+	}
+}
+
 func TestTokenEndpoint_CodeNotConsumedOnValidationFailure(t *testing.T) {
 	srv := newTestServer(t)
 

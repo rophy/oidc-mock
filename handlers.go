@@ -295,7 +295,11 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		s.Store.DeleteAuthCode(code)
+		// Atomically consume to prevent concurrent redemption
+		if _, ok := s.Store.ConsumeAuthCode(code); !ok {
+			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			return
+		}
 		userSub = codeData.UserSub
 		nonce = codeData.Nonce
 		scope = codeData.Scope
