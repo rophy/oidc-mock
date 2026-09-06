@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -79,7 +82,18 @@ func serve(args []string) {
 	cfgYAML, _ := yaml.Marshal(cfg)
 	log.Printf("Runtime OIDC_CONFIG:\n---\n%s---", cfgYAML)
 	log.Printf("oidc-mock listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+
+	server := &http.Server{Addr: addr, Handler: mux}
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-quit
+		log.Println("shutting down...")
+		server.Shutdown(context.Background())
+	}()
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

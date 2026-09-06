@@ -8,8 +8,14 @@ build: ## Build the binary
 unit-test: ## Run unit and integration tests with coverage
 	go test -v -cover ./...
 
-e2e-test: ## Run Playwright e2e tests (requires chromium)
-	go test -tags e2e -v -timeout 60s ./e2e/
+e2e-test: ## Run Playwright e2e tests via Docker with coverage
+	@mkdir -p /tmp/oidc-mock-e2e-coverdir
+	@rm -f /tmp/oidc-mock-e2e-coverdir/*
+	GOCOVERDIR=/tmp/oidc-mock-e2e-coverdir go test -tags e2e -v -timeout 120s ./e2e/
+	@if ls /tmp/oidc-mock-e2e-coverdir/*.* >/dev/null 2>&1; then \
+		echo "--- e2e coverage ---"; \
+		go tool covdata percent -i=/tmp/oidc-mock-e2e-coverdir; \
+	fi
 
 test: unit-test e2e-test ## Run all tests
 

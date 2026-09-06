@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -10,34 +11,32 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/mxschmitt/playwright-go"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const baseURL = "http://localhost:19090"
-const redirectURI = baseURL + "/callback"
+var (
+	baseURL     string
+	redirectURI string
+	browser     playwright.Browser
+)
 
-var browser playwright.Browser
+const hostPort = "19090"
 
 func TestMain(m *testing.M) {
-	// Build the binary
-	build := exec.Command("go", "build", "-o", "/tmp/oidc-mock-e2e", ".")
-	build.Dir = ".."
-	build.Stdout = os.Stdout
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.Remove("/tmp/oidc-mock-e2e")
+	ctx := context.Background()
 
-	// Write a config file with redirect_uri matching our test port
-	configContent := fmt.Sprintf(`port: 19090
+	baseURL = "http://localhost:" + hostPort
+	redirectURI = baseURL + "/callback"
+
+	oidcConfig := fmt.Sprintf(`port: 8080
 issuer: %s
 clients:
   - id: default
@@ -58,37 +57,40 @@ users:
     roles: [viewer]
 `, baseURL, redirectURI, redirectURI)
 
-	configPath := filepath.Join(os.TempDir(), "oidc-mock-e2e-config.yaml")
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.Remove(configPath)
-
-	// Start the server with config
-	srv := exec.Command("/tmp/oidc-mock-e2e", "serve", "--config", configPath)
-	if err := srv.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to start server: %v\n", err)
-		os.Exit(1)
-	}
-	defer srv.Process.Kill()
-
-	// Wait for server to be ready
-	ready := false
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/.well-known/openid-configuration")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				ready = true
-				break
-			}
+	coverDir := os.Getenv("GOCOVERDIR")
+	env := map[string]string{"OIDC_CONFIG": oidcConfig}
+	var hostConfigMod func(*container.HostConfig)
+	if coverDir != "" {
+		env["GOCOVERDIR"] = "/coverdir"
+		hostConfigMod = func(hc *container.HostConfig) {
+			hc.Mounts = append(hc.Mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: coverDir,
+				Target: "/coverdir",
+			})
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
-	if !ready {
-		fmt.Fprintf(os.Stderr, "server not ready after 10s\n")
+
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			FromDockerfile: testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "Dockerfile",
+				BuildArgs:  map[string]*string{"COVER": ptr("true")},
+				BuildOptionsModifier: func(opts *types.ImageBuildOptions) {
+					opts.Target = "dev"
+				},
+			},
+			ExposedPorts:       []string{hostPort + ":8080/tcp"},
+			Env:                env,
+			Cmd:                []string{"serve"},
+			WaitingFor:         wait.ForHTTP("/.well-known/openid-configuration").WithPort("8080/tcp"),
+			HostConfigModifier: hostConfigMod,
+		},
+		Started: true,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to start container: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -103,7 +105,6 @@ users:
 		fmt.Fprintf(os.Stderr, "failed to start playwright: %v\n", err)
 		os.Exit(1)
 	}
-	defer pw.Stop()
 
 	browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(true),
@@ -112,10 +113,16 @@ users:
 		fmt.Fprintf(os.Stderr, "failed to launch browser: %v\n", err)
 		os.Exit(1)
 	}
-	defer browser.Close()
 
-	os.Exit(m.Run())
+	exitCode := m.Run()
+
+	browser.Close()
+	pw.Stop()
+	ctr.Terminate(ctx)
+	os.Exit(exitCode)
 }
+
+func ptr(s string) *string { return &s }
 
 func authorizeURL(clientID, redirURI string) string {
 	params := url.Values{
