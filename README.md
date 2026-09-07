@@ -5,7 +5,7 @@
 
 Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker UI and optional password protection per user.
 
-**Supported features:** optional per-user passwords, PKCE (S256/plain), refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation, RP-Initiated Logout, `at_hash`/`email_verified` claims.
+**Supported features:** public and confidential clients, PKCE (S256 required by default, plain opt-in), optional per-user passwords, refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation (RFC 7009), RP-Initiated Logout, `at_hash`/`email_verified` claims, `client_secret_basic` auth.
 
 ## Getting Started
 
@@ -56,13 +56,25 @@ Users with a `password` field require password entry after selection. Users with
 | Scope | Claims returned |
 |-------|----------------|
 | `openid` | `sub` |
-| `email` | `email` |
+| `email` | `email`, `email_verified` |
 | `profile` | `name` + custom claims |
 | `offline_access` | enables refresh token |
 
+### Public clients
+
+Omit `secret` from a client to make it a public client. Public clients must use PKCE with S256.
+
 ### PKCE
 
-Supported for public clients. Pass `code_challenge` and `code_challenge_method` (`S256` or `plain`) in the authorize request, then `code_verifier` in the token request.
+Pass `code_challenge` and `code_challenge_method` in the authorize request, then `code_verifier` in the token request. Public clients must use `S256` (the default). To allow `plain` for a public client, set `allow_plain_code_challenge: true` on the client:
+
+```yaml
+clients:
+  - id: my-spa
+    redirect_uris:
+      - http://localhost:3000/callback
+    allow_plain_code_challenge: true
+```
 
 ### Endpoints
 
@@ -70,7 +82,7 @@ Supported for public clients. Pass `code_challenge` and `code_challenge_method` 
 |----------|--------|-------------|
 | `/.well-known/openid-configuration` | GET | Discovery document |
 | `/authorize` | GET | Authorization (shows user picker) |
-| `/token` | POST | Token exchange and refresh |
+| `/token` | POST | Token exchange and refresh (`client_secret_post` or `client_secret_basic`) |
 | `/userinfo` | GET/POST | User claims (Bearer token or form-encoded) |
 | `/jwks` | GET | JSON Web Key Set |
 | `/revoke` | POST | Token revocation (RFC 7009) |
@@ -119,6 +131,7 @@ services:
 ```bash
 go run . serve
 go run . serve --config config.yaml
+go run . help
 ```
 
 Image published to `ghcr.io/rophy/oidc-mock`, tagged `latest` and `yyyymmdd-<hash>` on each push to master.
