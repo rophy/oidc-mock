@@ -1,11 +1,17 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed config_schema.json
+var configSchemaJSON string
 
 type Config struct {
 	Port    int      `yaml:"port"`
@@ -86,6 +92,13 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	if data != nil {
+		var raw any
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return Config{}, err
+		}
+		if err := validateConfigSchema(raw); err != nil {
+			return Config{}, err
+		}
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, err
 		}
@@ -99,4 +112,20 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func validateConfigSchema(data any) error {
+	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(configSchemaJSON))
+	if err != nil {
+		return fmt.Errorf("failed to parse config schema: %w", err)
+	}
+	c := jsonschema.NewCompiler()
+	if err := c.AddResource("config_schema.json", doc); err != nil {
+		return fmt.Errorf("failed to load config schema: %w", err)
+	}
+	sch, err := c.Compile("config_schema.json")
+	if err != nil {
+		return fmt.Errorf("failed to compile config schema: %w", err)
+	}
+	return sch.Validate(data)
 }

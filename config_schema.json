@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "issuer": {
+      "type": "string"
+    },
+    "clients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "secret": { "type": "string" },
+          "redirect_uris": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "allow_plain_code_challenge": { "type": "boolean" }
+        },
+        "required": ["id", "redirect_uris"],
+        "additionalProperties": false
+      }
+    },
+    "users": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sub": { "type": "string" },
+          "email": { "type": "string" },
+          "name": { "type": "string" },
+          "password": { "type": "string" }
+        },
+        "required": ["sub"],
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

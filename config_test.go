@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -131,6 +132,64 @@ func TestMultipleConfigSourcesError(t *testing.T) {
 	_, err := LoadConfig("")
 	if err == nil {
 		t.Fatal("expected error when both OIDC_CONFIG and OIDC_CONFIG_FILE are set")
+	}
+}
+
+func TestSchemaRejectsUnknownClientField(t *testing.T) {
+	t.Setenv("OIDC_CONFIG", `
+clients:
+  - id: my-app
+    secret: s
+    public: true
+    redirect_uris:
+      - http://localhost/cb
+users:
+  - sub: u1
+`)
+	_, err := LoadConfig("")
+	if err == nil {
+		t.Fatal("expected error for unknown client field 'public'")
+	}
+	if !strings.Contains(err.Error(), "public") {
+		t.Errorf("expected error mentioning 'public', got: %v", err)
+	}
+}
+
+func TestSchemaRejectsUnknownTopLevelField(t *testing.T) {
+	t.Setenv("OIDC_CONFIG", `
+debug: true
+clients:
+  - id: app
+    redirect_uris: [http://localhost/cb]
+users:
+  - sub: u1
+`)
+	_, err := LoadConfig("")
+	if err == nil {
+		t.Fatal("expected error for unknown top-level field 'debug'")
+	}
+	if !strings.Contains(err.Error(), "debug") {
+		t.Errorf("expected error mentioning 'debug', got: %v", err)
+	}
+}
+
+func TestSchemaAllowsCustomUserClaims(t *testing.T) {
+	t.Setenv("OIDC_CONFIG", `
+clients:
+  - id: app
+    redirect_uris: [http://localhost/cb]
+users:
+  - sub: u1
+    email: a@b.com
+    roles: [admin]
+    department: engineering
+`)
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Fatalf("expected custom user claims to be allowed, got: %v", err)
+	}
+	if cfg.Users[0].Claims["department"] != "engineering" {
+		t.Errorf("expected department=engineering, got %v", cfg.Users[0].Claims["department"])
 	}
 }
 
