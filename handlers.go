@@ -269,35 +269,39 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 		codeData, ok := s.Store.GetAuthCode(code)
 		if !ok {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "authorization code is invalid or expired")
 			return
 		}
 		if codeData.ClientID != clientID || codeData.RedirectURI != redirectURI {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "client_id or redirect_uri mismatch")
 			return
 		}
 		if isPublicClient && codeData.CodeChallenge == "" {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "public clients must use PKCE")
 			return
 		}
 		if isPublicClient && codeData.CodeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "public clients must use S256 code_challenge_method")
 			return
 		}
 		if codeData.CodeChallenge != "" {
 			codeVerifier := r.FormValue("code_verifier")
-			if codeVerifier == "" || !validCodeVerifier(codeVerifier) {
-				jsonError(w, "invalid_grant", http.StatusBadRequest)
+			if codeVerifier == "" {
+				jsonError(w, "invalid_grant", http.StatusBadRequest, "code_verifier is required when code_challenge was used")
+				return
+			}
+			if !validCodeVerifier(codeVerifier) {
+				jsonError(w, "invalid_grant", http.StatusBadRequest, "code_verifier must be 43-128 characters using [A-Za-z0-9._~-] (RFC 7636 Section 4.1)")
 				return
 			}
 			if !verifyPKCE(codeData.CodeChallenge, codeData.CodeChallengeMethod, codeVerifier) {
-				jsonError(w, "invalid_grant", http.StatusBadRequest)
+				jsonError(w, "invalid_grant", http.StatusBadRequest, "PKCE verification failed")
 				return
 			}
 		}
 		// Atomically consume to prevent concurrent redemption
 		if _, ok := s.Store.ConsumeAuthCode(code); !ok {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "authorization code already consumed")
 			return
 		}
 		userSub = codeData.UserSub
@@ -308,11 +312,11 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		rt := r.FormValue("refresh_token")
 		rtData, ok := s.Store.GetRefreshToken(rt)
 		if !ok {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "refresh token is invalid or revoked")
 			return
 		}
 		if rtData.ClientID != clientID {
-			jsonError(w, "invalid_grant", http.StatusBadRequest)
+			jsonError(w, "invalid_grant", http.StatusBadRequest, "refresh token was issued to a different client")
 			return
 		}
 		userSub = rtData.UserSub
@@ -325,7 +329,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 	user := s.findUser(userSub)
 	if user == nil {
-		jsonError(w, "invalid_grant", http.StatusBadRequest)
+		jsonError(w, "invalid_grant", http.StatusBadRequest, "user not found")
 		return
 	}
 
@@ -499,10 +503,14 @@ func (s *Server) HandleEndSession(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
-func jsonError(w http.ResponseWriter, errCode string, status int) {
+func jsonError(w http.ResponseWriter, errCode string, status int, description ...string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": errCode})
+	resp := map[string]string{"error": errCode}
+	if len(description) > 0 && description[0] != "" {
+		resp["error_description"] = description[0]
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func validCodeVerifier(v string) bool {

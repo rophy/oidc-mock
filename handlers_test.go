@@ -898,6 +898,14 @@ func TestTokenEndpoint_PKCE_InvalidVerifierFormat(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for short verifier, got %d", w.Code)
 	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error_description"] == "" {
+		t.Error("expected error_description for invalid verifier format")
+	}
+	if !strings.Contains(resp["error_description"], "43-128") {
+		t.Errorf("expected description to mention '43-128', got: %s", resp["error_description"])
+	}
 }
 
 func TestTokenEndpoint_PKCE_UnsupportedMethod(t *testing.T) {
@@ -1661,5 +1669,105 @@ func TestAuthorizeCallback_UnknownUser(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_ErrorDescriptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(srv *Server)
+		form        string
+		wantDesc    string
+	}{
+		{
+			name:     "expired or invalid code",
+			setup:    func(srv *Server) {},
+			form:     "grant_type=authorization_code&code=nonexistent&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback",
+			wantDesc: "authorization code is invalid or expired",
+		},
+		{
+			name: "redirect_uri mismatch",
+			setup: func(srv *Server) {
+				srv.Store.SaveAuthCode("code1", AuthCodeData{
+					UserSub: "user1", ClientID: "default",
+					RedirectURI: "http://localhost:8080/callback",
+					ExpiresAt:   time.Now().Add(60 * time.Second),
+				})
+			},
+			form:     "grant_type=authorization_code&code=code1&client_id=default&client_secret=secret&redirect_uri=http://wrong/callback",
+			wantDesc: "client_id or redirect_uri mismatch",
+		},
+		{
+			name: "missing code_verifier",
+			setup: func(srv *Server) {
+				srv.Store.SaveAuthCode("code2", AuthCodeData{
+					UserSub: "user1", ClientID: "default",
+					RedirectURI:         "http://localhost:8080/callback",
+					CodeChallenge:       "challenge",
+					CodeChallengeMethod: "S256",
+					ExpiresAt:           time.Now().Add(60 * time.Second),
+				})
+			},
+			form:     "grant_type=authorization_code&code=code2&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback",
+			wantDesc: "code_verifier is required",
+		},
+		{
+			name: "code_verifier too short",
+			setup: func(srv *Server) {
+				srv.Store.SaveAuthCode("code3", AuthCodeData{
+					UserSub: "user1", ClientID: "default",
+					RedirectURI:         "http://localhost:8080/callback",
+					CodeChallenge:       "challenge",
+					CodeChallengeMethod: "S256",
+					ExpiresAt:           time.Now().Add(60 * time.Second),
+				})
+			},
+			form:     "grant_type=authorization_code&code=code3&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=tooshort",
+			wantDesc: "43-128",
+		},
+		{
+			name: "PKCE verification failed",
+			setup: func(srv *Server) {
+				srv.Store.SaveAuthCode("code4", AuthCodeData{
+					UserSub: "user1", ClientID: "default",
+					RedirectURI:         "http://localhost:8080/callback",
+					CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+					CodeChallengeMethod: "S256",
+					ExpiresAt:           time.Now().Add(60 * time.Second),
+				})
+			},
+			form:     "grant_type=authorization_code&code=code4&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback&code_verifier=wrongverifier1234567890abcdefghijklmnopqrstuvwx",
+			wantDesc: "PKCE verification failed",
+		},
+		{
+			name: "invalid refresh token",
+			setup: func(srv *Server) {},
+			form:     "grant_type=refresh_token&refresh_token=nonexistent&client_id=default&client_secret=secret",
+			wantDesc: "refresh token is invalid or revoked",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t)
+			tt.setup(srv)
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(tt.form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			srv.HandleToken(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", w.Code)
+			}
+			var resp map[string]string
+			json.NewDecoder(w.Body).Decode(&resp)
+			if resp["error"] != "invalid_grant" {
+				t.Errorf("expected error=invalid_grant, got %s", resp["error"])
+			}
+			if !strings.Contains(resp["error_description"], tt.wantDesc) {
+				t.Errorf("expected error_description containing %q, got %q", tt.wantDesc, resp["error_description"])
+			}
+		})
 	}
 }
