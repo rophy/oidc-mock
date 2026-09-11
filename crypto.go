@@ -47,12 +47,15 @@ func (c IDTokenClaims) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(c.Custom) == 0 {
-		return b, nil
-	}
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
+	}
+	// RFC 7519 §4.1.3: single audience MAY be a string (some clients require it)
+	if aud, ok := m["aud"]; ok {
+		if arr, ok := aud.([]any); ok && len(arr) == 1 {
+			m["aud"] = arr[0]
+		}
 	}
 	for k, v := range c.Custom {
 		m[k] = v
