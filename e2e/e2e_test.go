@@ -843,6 +843,40 @@ func TestDiscoveryAndJWKSVerification(t *testing.T) {
 	}
 }
 
+func TestSingleAudIsString(t *testing.T) {
+	tokens := loginAndGetTokens(t, "default", "secret", "openid")
+	idToken := tokens["id_token"].(string)
+
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
+	}
+
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(claimsJSON, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	audRaw, ok := raw["aud"]
+	if !ok {
+		t.Fatal("expected aud claim in ID token")
+	}
+
+	// Single audience must be serialized as a JSON string, not an array
+	var audStr string
+	if err := json.Unmarshal(audRaw, &audStr); err != nil {
+		t.Fatalf("expected aud to be a JSON string (RFC 7519 §4.1.3), got: %s", string(audRaw))
+	}
+	if audStr != "default" {
+		t.Errorf("expected aud=default, got %q", audStr)
+	}
+}
+
 func TestScopeFiltering(t *testing.T) {
 	// openid only — no email or name
 	tokens := loginAndGetTokens(t, "default", "secret", "openid")
