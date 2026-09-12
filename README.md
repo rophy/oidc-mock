@@ -5,7 +5,7 @@
 
 Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker UI and optional password protection per user.
 
-**Supported features:** public and confidential clients, PKCE (S256 required by default, plain opt-in), optional per-user passwords, refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation (RFC 7009), RP-Initiated Logout, `at_hash`/`email_verified` claims, `client_secret_basic` auth.
+**Supported features:** public and confidential clients, PKCE (S256 required by default, plain opt-in), optional per-user passwords, refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation (RFC 7009), RP-Initiated Logout, `at_hash`/`azp`/`auth_time`/`email_verified` claims, `client_secret_basic` auth, CORS (browser/SPA compatible).
 
 ## Getting Started
 
