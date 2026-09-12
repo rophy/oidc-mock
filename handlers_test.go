@@ -2404,3 +2404,73 @@ func TestAuthorizeEndpoint_RequestURIParamNotSupported(t *testing.T) {
 		t.Errorf("expected error=request_uri_not_supported, got %s", loc.Query().Get("error"))
 	}
 }
+
+func TestDiscoveryEndpoint_RequestAndClaimsParametersNotSupported(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/.well-known/openid-configuration", nil)
+	w := httptest.NewRecorder()
+	srv.HandleDiscovery(w, req)
+
+	var doc map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["request_parameter_supported"] != false {
+		t.Errorf("expected request_parameter_supported=false, got %v", doc["request_parameter_supported"])
+	}
+	if doc["request_uri_parameter_supported"] != false {
+		t.Errorf("expected request_uri_parameter_supported=false, got %v", doc["request_uri_parameter_supported"])
+	}
+	if doc["claims_parameter_supported"] != false {
+		t.Errorf("expected claims_parameter_supported=false, got %v", doc["claims_parameter_supported"])
+	}
+}
+
+func TestAuthorizeCallback_FormPost_RendersAutoSubmitForm(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("sub=user1&client_id=default&redirect_uri=http://localhost:8080/callback&state=xyz&nonce=abc&response_mode=form_post")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `method="post"`) {
+		t.Error("expected form method=post in body")
+	}
+	if !strings.Contains(body, `action="http://localhost:8080/callback"`) {
+		t.Error("expected form action=redirect_uri in body")
+	}
+	if !strings.Contains(body, `name="code"`) {
+		t.Error("expected hidden input for code")
+	}
+	if !strings.Contains(body, `name="state"`) || !strings.Contains(body, `value="xyz"`) {
+		t.Error("expected hidden input for state=xyz")
+	}
+}
+
+func TestAuthorizeEndpoint_FormPost_ErrorRendersAutoSubmitForm(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=invalid&scope=openid&state=xyz&response_mode=form_post", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `name="error"`) {
+		t.Error("expected hidden input for error")
+	}
+	if !strings.Contains(body, `name="error_description"`) {
+		t.Error("expected hidden input for error_description")
+	}
+}

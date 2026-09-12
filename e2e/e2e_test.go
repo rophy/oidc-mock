@@ -1095,6 +1095,64 @@ func TestPromptNoneReturnsLoginRequired(t *testing.T) {
 	}
 }
 
+func TestFormPostResponseModeFlow(t *testing.T) {
+	page, err := browser.NewPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Close()
+
+	if err := page.Route(redirectURI+"**", func(route playwright.Route) {
+		route.Fulfill(playwright.RouteFulfillOptions{
+			Status: playwright.Int(200),
+			Body:   "ok",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	params := url.Values{
+		"client_id":     {"default"},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		"scope":         {"openid"},
+		"state":         {"formstate"},
+		"nonce":         {"formnonce"},
+		"response_mode": {"form_post"},
+	}
+	if _, err := page.Goto(baseURL + "/authorize?" + params.Encode()); err != nil {
+		t.Fatal(err)
+	}
+
+	aliceButton := page.Locator("button.user-card:has-text('Alice')")
+
+	callbackReq, err := page.ExpectRequest(redirectURI+"**", func() error {
+		return aliceButton.Click()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if callbackReq.Method() != "POST" {
+		t.Errorf("expected POST to redirect_uri, got %s", callbackReq.Method())
+	}
+
+	postData, err := callbackReq.PostData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals, err := url.ParseQuery(postData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals.Get("code") == "" {
+		t.Errorf("expected code in form_post body, got: %s", postData)
+	}
+	if vals.Get("state") != "formstate" {
+		t.Errorf("expected state=formstate, got %s", vals.Get("state"))
+	}
+}
+
 func TestRevocationRequiresClientAuth(t *testing.T) {
 	tokens := loginAndGetTokens(t, "default", "secret", "openid")
 	accessToken := tokens["access_token"].(string)
