@@ -33,12 +33,14 @@ func GenerateKeyPair() (*KeyPair, error) {
 
 type IDTokenClaims struct {
 	jwt.RegisteredClaims
-	Nonce         string         `json:"nonce,omitempty"`
-	Email         string         `json:"email,omitempty"`
-	EmailVerified *bool          `json:"email_verified,omitempty"`
-	Name          string         `json:"name,omitempty"`
-	AtHash        string         `json:"at_hash,omitempty"`
-	Custom        map[string]any `json:"-"`
+	Nonce         string          `json:"nonce,omitempty"`
+	Email         string          `json:"email,omitempty"`
+	EmailVerified *bool           `json:"email_verified,omitempty"`
+	Name          string          `json:"name,omitempty"`
+	AtHash        string          `json:"at_hash,omitempty"`
+	Azp           string          `json:"azp,omitempty"`
+	AuthTime      *jwt.NumericDate `json:"auth_time,omitempty"`
+	Custom        map[string]any  `json:"-"`
 }
 
 func (c IDTokenClaims) MarshalJSON() ([]byte, error) {

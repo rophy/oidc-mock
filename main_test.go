@@ -187,6 +187,45 @@ func TestParseConfigPath(t *testing.T) {
 	}
 }
 
+func TestCORSMiddleware(t *testing.T) {
+	cfg := DefaultConfig()
+	mux, err := newServerMux(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := corsMiddleware(mux)
+
+	t.Run("GET adds CORS headers", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/.well-known/openid-configuration", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Errorf("expected ACAO=*, got %q", w.Header().Get("Access-Control-Allow-Origin"))
+		}
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+	})
+
+	t.Run("OPTIONS preflight returns 204", func(t *testing.T) {
+		req := httptest.NewRequest("OPTIONS", "/token", nil)
+		req.Header.Set("Origin", "http://example.com")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNoContent {
+			t.Errorf("expected 204, got %d", w.Code)
+		}
+		if w.Header().Get("Access-Control-Allow-Methods") == "" {
+			t.Error("expected Access-Control-Allow-Methods header")
+		}
+		if w.Header().Get("Access-Control-Allow-Headers") == "" {
+			t.Error("expected Access-Control-Allow-Headers header")
+		}
+	})
+}
+
 func TestNewServerMux(t *testing.T) {
 	cfg := DefaultConfig()
 	mux, err := newServerMux(cfg)

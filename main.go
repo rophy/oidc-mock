@@ -63,6 +63,19 @@ func parseConfigPath(args []string) string {
 	return ""
 }
 
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func newServerMux(cfg Config) (*http.ServeMux, error) {
 	kp, err := GenerateKeyPair()
 	if err != nil {
@@ -126,5 +139,5 @@ func serve(ctx context.Context, args []string) error {
 	log.Printf("Runtime OIDC_CONFIG:\n---\n%s---", cfgYAML)
 	log.Printf("oidc-mock listening on %s", addr)
 
-	return listenAndServe(ctx, addr, mux)
+	return listenAndServe(ctx, addr, corsMiddleware(mux))
 }

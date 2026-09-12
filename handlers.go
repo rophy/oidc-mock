@@ -55,7 +55,7 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"revocation_endpoint":                   s.Config.Issuer + "/revoke",
 		"end_session_endpoint":                  s.Config.Issuer + "/end-session",
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
-		"claims_supported":                      []string{"sub", "iss", "aud", "exp", "iat", "nonce", "email", "email_verified", "name", "at_hash"},
+		"claims_supported":                      []string{"sub", "iss", "aud", "exp", "iat", "nonce", "email", "email_verified", "name", "at_hash", "azp", "auth_time"},
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -91,18 +91,24 @@ type pickerData struct {
 	CodeChallengeMethod string
 }
 
+func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, state, errCode, errDesc string) {
+	u, _ := url.Parse(redirectURI)
+	q := u.Query()
+	q.Set("error", errCode)
+	q.Set("error_description", errDesc)
+	if state != "" {
+		q.Set("state", state)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
 func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	clientID := r.URL.Query().Get("client_id")
 	redirectURI := r.URL.Query().Get("redirect_uri")
 	state := r.URL.Query().Get("state")
 	nonce := r.URL.Query().Get("nonce")
 	scope := r.URL.Query().Get("scope")
-
-	responseType := r.URL.Query().Get("response_type")
-	if responseType != "code" {
-		http.Error(w, "unsupported response_type: only 'code' is supported", http.StatusBadRequest)
-		return
-	}
 
 	client := s.findClient(clientID)
 	if client == nil {
@@ -114,13 +120,19 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	responseType := r.URL.Query().Get("response_type")
+	if responseType != "code" {
+		redirectError(w, r, redirectURI, state, "unsupported_response_type", "only 'code' is supported")
+		return
+	}
+
 	codeChallenge := r.URL.Query().Get("code_challenge")
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	if codeChallenge != "" && codeChallengeMethod == "" {
 		codeChallengeMethod = "plain"
 	}
 	if client.Secret == "" && codeChallenge != "" && codeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
-		http.Error(w, "public clients must use S256 code_challenge_method", http.StatusBadRequest)
+		redirectError(w, r, redirectURI, state, "invalid_request", "public clients must use S256 code_challenge_method")
 		return
 	}
 
@@ -350,8 +362,10 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
-		Nonce:  nonce,
-		AtHash: atHash,
+		Nonce:    nonce,
+		AtHash:   atHash,
+		Azp:      clientID,
+		AuthTime: jwt.NewNumericDate(now),
 	}
 	if hasScope(scope, "email") {
 		idTokenClaims.Email = user.Email
@@ -387,8 +401,9 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp["refresh_token"] = refreshToken
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -454,7 +469,7 @@ func (s *Server) HandleUserinfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	json.NewEncoder(w).Encode(claims)
 }
 
@@ -504,7 +519,7 @@ func (s *Server) HandleEndSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func jsonError(w http.ResponseWriter, errCode string, status int, description ...string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	w.WriteHeader(status)
 	resp := map[string]string{"error": errCode}
 	if len(description) > 0 && description[0] != "" {

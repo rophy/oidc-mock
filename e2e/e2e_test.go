@@ -843,6 +843,114 @@ func TestDiscoveryAndJWKSVerification(t *testing.T) {
 	}
 }
 
+func TestIDTokenContainsAzpAndAuthTime(t *testing.T) {
+	tokens := loginAndGetTokens(t, "default", "secret", "openid")
+	idToken := tokens["id_token"].(string)
+
+	parts := strings.Split(idToken, ".")
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var claims map[string]any
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		t.Fatal(err)
+	}
+
+	azp, ok := claims["azp"].(string)
+	if !ok || azp == "" {
+		t.Fatal("expected azp claim")
+	}
+	if azp != "default" {
+		t.Errorf("expected azp=default, got %q", azp)
+	}
+
+	authTime, ok := claims["auth_time"].(float64)
+	if !ok || authTime == 0 {
+		t.Fatal("expected auth_time claim")
+	}
+}
+
+func TestCORSHeaders(t *testing.T) {
+	resp, err := http.Get(baseURL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("expected ACAO=*, got %q", resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestCORSPreflight(t *testing.T) {
+	req, _ := http.NewRequest("OPTIONS", baseURL+"/token", nil)
+	req.Header.Set("Origin", "http://example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Access-Control-Allow-Methods") == "" {
+		t.Error("expected Access-Control-Allow-Methods header")
+	}
+}
+
+func TestTokenResponseHeaders(t *testing.T) {
+	tokens := loginAndGetTokens(t, "default", "secret", "openid")
+	_ = tokens
+
+	// loginAndGetTokens doesn't expose headers, so test directly
+	page, err := browser.NewPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Close()
+
+	_, err = page.Goto(authorizeURL("default", redirectURI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceButton := page.Locator("button.user-card:has-text('Alice')")
+	if err := aliceButton.Click(); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.WaitForURL("**/callback**"); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := url.Parse(page.URL())
+	code := parsed.Query().Get("code")
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {"default"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {redirectURI},
+	}
+	resp, err := http.PostForm(baseURL+"/token", tokenForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("expected Cache-Control: no-store, got %q", resp.Header.Get("Cache-Control"))
+	}
+	if resp.Header.Get("Pragma") != "no-cache" {
+		t.Errorf("expected Pragma: no-cache, got %q", resp.Header.Get("Pragma"))
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "charset=UTF-8") {
+		t.Errorf("expected charset=UTF-8 in Content-Type, got %q", ct)
+	}
+}
+
 func TestSingleAudIsString(t *testing.T) {
 	tokens := loginAndGetTokens(t, "default", "secret", "openid")
 	idToken := tokens["id_token"].(string)

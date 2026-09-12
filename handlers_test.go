@@ -163,16 +163,20 @@ func TestAuthorizeEndpoint_InvalidRedirectURI(t *testing.T) {
 func TestAuthorizeEndpoint_InvalidResponseType(t *testing.T) {
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=token&scope=openid", nil)
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=token&scope=openid&state=xyz", nil)
 	w := httptest.NewRecorder()
 
 	srv.HandleAuthorize(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "response_type") {
-		t.Error("expected error message to mention response_type")
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "unsupported_response_type" {
+		t.Errorf("expected error=unsupported_response_type, got %s", loc.Query().Get("error"))
+	}
+	if loc.Query().Get("state") != "xyz" {
+		t.Errorf("expected state=xyz, got %s", loc.Query().Get("state"))
 	}
 }
 
@@ -184,8 +188,12 @@ func TestAuthorizeEndpoint_MissingResponseType(t *testing.T) {
 
 	srv.HandleAuthorize(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "unsupported_response_type" {
+		t.Errorf("expected error=unsupported_response_type, got %s", loc.Query().Get("error"))
 	}
 }
 
@@ -546,8 +554,8 @@ func TestUserinfoEndpoint(t *testing.T) {
 	}
 
 	ct := w.Header().Get("Content-Type")
-	if ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %q", ct)
+	if ct != "application/json;charset=UTF-8" {
+		t.Errorf("expected Content-Type application/json;charset=UTF-8, got %q", ct)
 	}
 
 	var claims map[string]any
@@ -1180,13 +1188,20 @@ func TestTokenEndpoint_PublicClient_PlainPKCE_AllowedWithConfig(t *testing.T) {
 func TestAuthorize_PublicClient_PlainPKCE_Rejected(t *testing.T) {
 	srv := newTestServerWithPublicClient(t)
 
-	req := httptest.NewRequest("GET", "/authorize?client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&response_type=code&scope=openid&code_challenge=somechallenge&code_challenge_method=plain", nil)
+	req := httptest.NewRequest("GET", "/authorize?client_id=public-cli&redirect_uri=http://127.0.0.1:43212/callback&response_type=code&scope=openid&code_challenge=somechallenge&code_challenge_method=plain&state=xyz", nil)
 	w := httptest.NewRecorder()
 
 	srv.HandleAuthorize(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for public client with plain code_challenge, got %d", w.Code)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "invalid_request" {
+		t.Errorf("expected error=invalid_request, got %s", loc.Query().Get("error"))
+	}
+	if loc.Query().Get("state") != "xyz" {
+		t.Errorf("expected state=xyz, got %s", loc.Query().Get("state"))
 	}
 }
 
@@ -1669,6 +1684,96 @@ func TestAuthorizeCallback_UnknownUser(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_IDToken_ContainsAzpAndAuthTime(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("claimcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Nonce:       "n",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=claimcode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	idTokenStr := resp["id_token"].(string)
+	parsed, err := jwt.Parse(idTokenStr, func(token *jwt.Token) (any, error) {
+		return &srv.KeyPair.PrivateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := parsed.Claims.(jwt.MapClaims)
+
+	azp, ok := claims["azp"].(string)
+	if !ok || azp == "" {
+		t.Fatal("expected azp claim in id_token")
+	}
+	if azp != "default" {
+		t.Errorf("expected azp=default, got %s", azp)
+	}
+
+	authTime, ok := claims["auth_time"].(float64)
+	if !ok || authTime == 0 {
+		t.Fatal("expected auth_time claim in id_token")
+	}
+	now := float64(time.Now().Unix())
+	if authTime < now-10 || authTime > now+10 {
+		t.Errorf("auth_time %v not within 10s of now %v", authTime, now)
+	}
+}
+
+func TestTokenEndpoint_ResponseHeaders(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("hdrcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Nonce:       "n",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=hdrcode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json;charset=UTF-8" {
+		t.Errorf("expected Content-Type application/json;charset=UTF-8, got %q", ct)
+	}
+	cc := w.Header().Get("Cache-Control")
+	if cc != "no-store" {
+		t.Errorf("expected Cache-Control no-store, got %q", cc)
+	}
+	pragma := w.Header().Get("Pragma")
+	if pragma != "no-cache" {
+		t.Errorf("expected Pragma no-cache, got %q", pragma)
 	}
 }
 
