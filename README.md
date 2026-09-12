@@ -13,7 +13,7 @@ $ docker run --rm -p 8080:8080 ghcr.io/rophy/oidc-mock serve
 
 Discovery: `http://localhost:8080/.well-known/openid-configuration`
 
-Default config ships one confidential client (`default` / `secret`) and two users (Alice, Bob). Override it with your own — see [Configuration](#configuration).
+Default config ships one confidential client (`default` / `secret`, redirect URI `http://localhost:8080/callback`) and two users (`user1` Alice, `user2` Bob). Override it with your own — see [Configuration](#configuration).
 
 ## Endpoints
 
@@ -25,7 +25,7 @@ Default config ships one confidential client (`default` / `secret`) and two user
 | `/userinfo` | GET/POST | User claims (Bearer token) |
 | `/jwks` | GET | JSON Web Key Set |
 | `/revoke` | POST | Token revocation (RFC 7009) |
-| `/end-session` | GET/POST | RP-Initiated Logout |
+| `/end-session` | GET/POST | RP-Initiated Logout (redirect only, does not revoke tokens) |
 
 ## Configuration
 
@@ -35,7 +35,7 @@ Provide config using exactly one of:
 - `OIDC_CONFIG_FILE` env var — path to a YAML file
 - `--config <file>` flag
 
-Setting more than one is an error. `OIDC_PORT` overrides the port independently.
+Setting more than one is an error. `OIDC_PORT` overrides the port independently. Omitted top-level keys keep their defaults — e.g. setting only `clients` keeps the default users. Config is validated against a JSON schema; unknown keys are rejected at startup.
 
 ```yaml
 # Full config example
@@ -105,7 +105,9 @@ Or mount a file: `OIDC_CONFIG_FILE: /config.yaml` with a volume.
 ## Notes
 
 - **Issuer** must not contain a path (e.g. `http://localhost:8080`, not `http://localhost:8080/oidc`). Set it to the URL your clients actually use — in docker-compose, that's typically `http://localhost:<host-port>`, not the container-internal address.
-- **Access tokens** are signed JWTs (RFC 9068, `typ: at+jwt`) verifiable against `/jwks`. Resource servers (Spring, ASP.NET, Envoy, oauth2-proxy) can validate them without calling back to the mock.
+- **All state is ephemeral.** Signing keys and tokens live in memory — a restart invalidates everything and rotates the JWKS. Resource servers that cache keys will need to refetch.
+- **Access tokens** are signed JWTs (RFC 9068, `typ: at+jwt`) verifiable against `/jwks`. Claims include `iss`, `sub`, `aud` (= client_id), `scope`, `client_id`, `jti`, `exp`, `iat`. Resource servers (Spring, ASP.NET, Envoy, oauth2-proxy) can validate them without calling back to the mock.
+- **Token lifetimes**: auth codes 60s, access/ID tokens 1h, refresh tokens don't expire. Revocation via `/revoke` removes tokens from the store but JWT access tokens remain cryptographically valid until expiry.
 - **Loopback redirects** allow any port for `localhost`, `127.0.0.1`, and `[::1]` per RFC 8252 §7.3 — useful for CLI tools that bind an ephemeral port.
 - **`response_mode=form_post`** is supported for ASP.NET Core and other clients that default to it.
 - **`prompt=none`** always returns `login_required` (no server-side session). Use `offline_access` scope with refresh tokens for token renewal.
