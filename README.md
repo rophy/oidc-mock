@@ -13,7 +13,7 @@ $ docker run --rm -p 8080:8080 ghcr.io/rophy/oidc-mock serve
 
 Discovery: `http://localhost:8080/.well-known/openid-configuration`
 
-Default config ships one confidential client (`default` / `secret`, redirect URI `http://localhost:8080/callback`) and two users (`user1` Alice, `user2` Bob). Override it with your own — see [Configuration](#configuration).
+Default config ships one confidential client (`default` / `secret`, redirect URI `http://localhost:8080/callback`) and two users (`user1` Alice with `roles: [admin]`, `user2` Bob with `roles: [viewer]`). Thanks to [loopback port flexibility](#notes), the default client also accepts `http://localhost:<any-port>/callback`. Override with your own config — see [Configuration](#configuration).
 
 ## Endpoints
 
@@ -24,7 +24,7 @@ Default config ships one confidential client (`default` / `secret`, redirect URI
 | `/token` | POST | Token exchange and refresh |
 | `/userinfo` | GET/POST | User claims (Bearer token) |
 | `/jwks` | GET | JSON Web Key Set |
-| `/revoke` | POST | Token revocation (RFC 7009) |
+| `/revoke` | POST | Token revocation (RFC 7009, requires client auth) |
 | `/end-session` | GET/POST | RP-Initiated Logout (redirect only, does not revoke tokens) |
 
 ## Configuration
@@ -46,7 +46,7 @@ clients:
     secret: my-secret
     redirect_uris:
       - http://localhost:3000/callback
-    post_logout_redirect_uris:        # optional, falls back to redirect_uri origin
+    post_logout_redirect_uris:        # optional, falls back to any client's redirect_uri origin
       - http://localhost:3000/logged-out
   - id: my-spa                        # public client (no secret)
     redirect_uris:
@@ -106,8 +106,9 @@ Or mount a file: `OIDC_CONFIG_FILE: /config.yaml` with a volume.
 
 - **Issuer** must not contain a path (e.g. `http://localhost:8080`, not `http://localhost:8080/oidc`). Set it to the URL your clients actually use — in docker-compose, that's typically `http://localhost:<host-port>`, not the container-internal address.
 - **All state is ephemeral.** Signing keys and tokens live in memory — a restart invalidates everything and rotates the JWKS. Resource servers that cache keys will need to refetch.
-- **Access tokens** are signed JWTs (RFC 9068, `typ: at+jwt`) verifiable against `/jwks`. Claims include `iss`, `sub`, `aud` (= client_id), `scope`, `client_id`, `jti`, `exp`, `iat`. Resource servers (Spring, ASP.NET, Envoy, oauth2-proxy) can validate them without calling back to the mock.
-- **Token lifetimes**: auth codes 60s, access/ID tokens 1h, refresh tokens don't expire. Revocation via `/revoke` removes tokens from the store but JWT access tokens remain cryptographically valid until expiry.
+- **Access tokens** are signed JWTs (RFC 9068, `typ: at+jwt`) verifiable against `/jwks`. Claims: `iss`, `sub`, `aud` (= client_id), `scope`, `client_id`, `jti`, `exp`, `iat`. ID tokens additionally carry `nonce`, `at_hash`, `azp`, `auth_time`, plus `email`/`email_verified`/`name`/custom claims per scope. Both use string `aud` (not array) for single audiences.
+- **Token lifetimes**: auth codes 60s, access/ID tokens 1h, refresh tokens don't expire. Each refresh issues a new refresh token without revoking the old one. Revocation via `/revoke` removes tokens from the store (revoking a refresh token also revokes its access tokens) but JWT access tokens remain cryptographically valid until expiry.
+- **Startup logs** print the full effective config including client secrets and user passwords.
 - **Loopback redirects** allow any port for `localhost`, `127.0.0.1`, and `[::1]` per RFC 8252 §7.3 — useful for CLI tools that bind an ephemeral port.
 - **`response_mode=form_post`** is supported for ASP.NET Core and other clients that default to it.
 - **`prompt=none`** always returns `login_required` (no server-side session). Use `offline_access` scope with refresh tokens for token renewal.

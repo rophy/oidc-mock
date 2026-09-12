@@ -466,19 +466,19 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 	// Generate JWT access token (RFC 9068)
 	accessTokenExpiry := time.Now().Add(time.Hour)
-	atClaims := jwt.RegisteredClaims{
-		Issuer:    s.Config.Issuer,
-		Subject:   user.Sub,
-		Audience:  jwt.ClaimStrings{clientID},
-		ExpiresAt: jwt.NewNumericDate(accessTokenExpiry),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		ID:        GenerateRandomString(16),
+	atClaims := accessTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    s.Config.Issuer,
+			Subject:   user.Sub,
+			Audience:  jwt.ClaimStrings{clientID},
+			ExpiresAt: jwt.NewNumericDate(accessTokenExpiry),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        GenerateRandomString(16),
+		},
+		Scope:    scope,
+		ClientID: clientID,
 	}
-	atToken := jwt.NewWithClaims(jwt.SigningMethodRS256, struct {
-		jwt.RegisteredClaims
-		Scope    string `json:"scope,omitempty"`
-		ClientID string `json:"client_id"`
-	}{atClaims, scope, clientID})
+	atToken := jwt.NewWithClaims(jwt.SigningMethodRS256, atClaims)
 	atToken.Header["kid"] = s.KeyPair.KID
 	atToken.Header["typ"] = "at+jwt"
 	accessToken, err := atToken.SignedString(s.KeyPair.PrivateKey)

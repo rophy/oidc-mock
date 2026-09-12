@@ -65,6 +65,30 @@ func (c IDTokenClaims) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+type accessTokenClaims struct {
+	jwt.RegisteredClaims
+	Scope    string `json:"scope,omitempty"`
+	ClientID string `json:"client_id"`
+}
+
+func (c accessTokenClaims) MarshalJSON() ([]byte, error) {
+	type Alias accessTokenClaims
+	b, err := json.Marshal(Alias(c))
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	if aud, ok := m["aud"]; ok {
+		if arr, ok := aud.([]any); ok && len(arr) == 1 {
+			m["aud"] = arr[0]
+		}
+	}
+	return json.Marshal(m)
+}
+
 func (kp *KeyPair) SignIDToken(claims IDTokenClaims) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = kp.KID

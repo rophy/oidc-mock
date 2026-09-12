@@ -2148,9 +2148,8 @@ func TestTokenEndpoint_JWTAccessToken(t *testing.T) {
 	if claims["sub"] != "user1" {
 		t.Errorf("expected sub=user1, got %v", claims["sub"])
 	}
-	aud, ok := claims["aud"].([]any)
-	if !ok || len(aud) != 1 || aud[0] != "default" {
-		t.Errorf("expected aud=[default], got %v", claims["aud"])
+	if claims["aud"] != "default" {
+		t.Errorf("expected aud=default (string), got %v", claims["aud"])
 	}
 	if claims["client_id"] != "default" {
 		t.Errorf("expected client_id=default, got %v", claims["client_id"])
