@@ -75,7 +75,7 @@ users:
 ### Client authentication
 
 - **Confidential clients**: `client_secret_post` or `client_secret_basic` (credentials are URL-decoded per RFC 6749 §2.3.1)
-- **Public clients**: omit `secret`. Must use PKCE with S256 (omitting `code_challenge_method` defaults to `plain`, which is rejected). Accepts Basic auth for `golang.org/x/oauth2` compatibility.
+- **Public clients**: omit `secret`. Must use PKCE with S256 (omitting `code_challenge_method` defaults to `plain`, which is rejected). Sending a non-empty `client_secret` in the form body is rejected; Basic auth is accepted for `golang.org/x/oauth2` compatibility.
 - **Confidential clients** may optionally use PKCE (S256 or plain) but it is not required.
 
 ### docker-compose
