@@ -1072,7 +1072,7 @@ func TestTokenEndpoint_PublicClient_SecretRejected(t *testing.T) {
 	}
 }
 
-func TestTokenEndpoint_PublicClient_BasicAuthRejected(t *testing.T) {
+func TestTokenEndpoint_PublicClient_BasicAuthAccepted(t *testing.T) {
 	srv := newTestServerWithPublicClient(t)
 
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -1089,7 +1089,7 @@ func TestTokenEndpoint_PublicClient_BasicAuthRejected(t *testing.T) {
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
-	// Public client must not use Basic auth
+	// Public client with Basic auth (empty password) should be accepted
 	form := strings.NewReader("grant_type=authorization_code&code=pubcode&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
 	req := httptest.NewRequest("POST", "/token", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1098,8 +1098,8 @@ func TestTokenEndpoint_PublicClient_BasicAuthRejected(t *testing.T) {
 
 	srv.HandleToken(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for public client with Basic auth, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for public client with Basic auth (empty password), got %d", w.Code)
 	}
 }
 

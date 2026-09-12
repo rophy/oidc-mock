@@ -366,13 +366,8 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isPublicClient := client.Secret == ""
-	if isPublicClient && (basicOk || (r.Form.Has("client_secret") && clientSecret != "")) {
-		if basicOk {
-			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
-			jsonError(w, "invalid_client", http.StatusUnauthorized)
-		} else {
-			jsonError(w, "invalid_client", http.StatusBadRequest)
-		}
+	if isPublicClient && !basicOk && r.Form.Has("client_secret") && clientSecret != "" {
+		jsonError(w, "invalid_client", http.StatusBadRequest)
 		return
 	}
 	if !isPublicClient && client.Secret != clientSecret {
@@ -387,6 +382,11 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 	var userSub, nonce, scope string
 	var authTime time.Time
+
+	if grantType == "" {
+		jsonError(w, "invalid_request", http.StatusBadRequest, "missing grant_type parameter")
+		return
+	}
 
 	switch grantType {
 	case "authorization_code":
@@ -437,6 +437,10 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 
 	case "refresh_token":
 		rt := r.FormValue("refresh_token")
+		if rt == "" {
+			jsonError(w, "invalid_request", http.StatusBadRequest, "missing refresh_token parameter")
+			return
+		}
 		rtData, ok := s.Store.GetRefreshToken(rt)
 		if !ok {
 			jsonError(w, "invalid_grant", http.StatusBadRequest, "refresh token is invalid or revoked")
@@ -607,6 +611,7 @@ func (s *Server) HandleUserinfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(claims)
 }
 
@@ -724,6 +729,7 @@ func (s *Server) validPostLogoutURI(uri string) bool {
 
 func jsonError(w http.ResponseWriter, errCode string, status int, description ...string) {
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	resp := map[string]string{"error": errCode}
 	if len(description) > 0 && description[0] != "" {
