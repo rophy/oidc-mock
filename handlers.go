@@ -315,9 +315,8 @@ func (s *Server) findClient(id string) *Client {
 	return nil
 }
 
-func isLoopbackHost(host string) bool {
-	h := strings.Split(host, ":")[0]
-	return h == "localhost" || h == "127.0.0.1" || h == "[::1]" || h == "::1"
+func isLoopbackHost(hostname string) bool {
+	return hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
 }
 
 func (s *Server) validRedirectURI(c *Client, uri string) bool {
@@ -328,7 +327,7 @@ func (s *Server) validRedirectURI(c *Client, uri string) bool {
 		// RFC 8252 §7.3: loopback redirects must allow any port
 		allowedU, err1 := url.Parse(allowed)
 		uriU, err2 := url.Parse(uri)
-		if err1 == nil && err2 == nil && isLoopbackHost(allowedU.Host) && isLoopbackHost(uriU.Host) {
+		if err1 == nil && err2 == nil && isLoopbackHost(allowedU.Hostname()) && isLoopbackHost(uriU.Hostname()) {
 			if allowedU.Scheme == uriU.Scheme && allowedU.Hostname() == uriU.Hostname() && allowedU.Path == uriU.Path {
 				return true
 			}

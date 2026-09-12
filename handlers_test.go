@@ -2212,6 +2212,20 @@ func TestValidRedirectURI_LoopbackPortFlexibility(t *testing.T) {
 	if srv.validRedirectURI(localhostClient, "http://example.com:8080/callback") {
 		t.Error("expected non-loopback host mismatch to be rejected")
 	}
+
+	// IPv6 loopback (RFC 8252 §7.3)
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "ipv6-cli",
+		Secret:       "sec",
+		RedirectURIs: []string{"http://[::1]:8080/callback"},
+	})
+	ipv6Client := srv.findClient("ipv6-cli")
+	if !srv.validRedirectURI(ipv6Client, "http://[::1]:9999/callback") {
+		t.Error("expected [::1] redirect with different port to be accepted")
+	}
+	if !srv.validRedirectURI(ipv6Client, "http://[::1]:8080/callback") {
+		t.Error("expected [::1] redirect with same port to be accepted")
+	}
 }
 
 func TestValidRedirectURI_NonLoopbackRequiresExactMatch(t *testing.T) {
