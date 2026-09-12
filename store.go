@@ -20,8 +20,10 @@ type AuthCodeData struct {
 }
 
 type AccessTokenData struct {
-	UserSub string
-	Scope   string
+	UserSub   string
+	ClientID  string
+	Scope     string
+	ExpiresAt time.Time
 }
 
 type RefreshTokenData struct {
@@ -84,7 +86,14 @@ func (s *Store) GetAccessToken(token string) (AccessTokenData, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, ok := s.accessTokens[token]
-	return data, ok
+	if !ok {
+		return AccessTokenData{}, false
+	}
+	if !data.ExpiresAt.IsZero() && time.Now().After(data.ExpiresAt) {
+		delete(s.accessTokens, token)
+		return AccessTokenData{}, false
+	}
+	return data, true
 }
 
 func (s *Store) SaveRefreshToken(token string, data RefreshTokenData) {
@@ -110,6 +119,20 @@ func (s *Store) RevokeRefreshToken(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.refreshTokens, token)
+}
+
+func (s *Store) RevokeRefreshTokenAndAccessTokens(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rtData, ok := s.refreshTokens[token]
+	if ok {
+		for k, v := range s.accessTokens {
+			if v.ClientID == rtData.ClientID && v.UserSub == rtData.UserSub {
+				delete(s.accessTokens, k)
+			}
+		}
+		delete(s.refreshTokens, token)
+	}
 }
 
 func GenerateRandomString(n int) string {

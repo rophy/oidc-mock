@@ -1109,8 +1109,8 @@ func TestRevocationRequiresClientAuth(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("revoke without client auth: expected 401, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("revoke without client auth: expected 400, got %d", resp.StatusCode)
 	}
 
 	// Token must still work since revocation was rejected

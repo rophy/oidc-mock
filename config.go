@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -106,6 +107,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	cfg.Issuer = strings.TrimSuffix(cfg.Issuer, "/")
+
+	if u, err := url.Parse(cfg.Issuer); err != nil {
+		return Config{}, fmt.Errorf("invalid issuer URL: %w", err)
+	} else if u.Path != "" && u.Path != "/" {
+		return Config{}, fmt.Errorf("issuer must not contain a path (got %q); use a dedicated host or port instead", cfg.Issuer)
+	}
 
 	if v := os.Getenv("OIDC_PORT"); v != "" {
 		var port int

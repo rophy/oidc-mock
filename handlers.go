@@ -48,6 +48,7 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              s.Config.Issuer + "/jwks",
 		"userinfo_endpoint":                     s.Config.Issuer + "/userinfo",
 		"response_types_supported":              []string{"code"},
+		"response_modes_supported":              []string{"query"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -125,9 +126,24 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.FormValue("request") != "" {
+		redirectError(w, r, redirectURI, state, "request_not_supported", "request parameter is not supported")
+		return
+	}
+	if r.FormValue("request_uri") != "" {
+		redirectError(w, r, redirectURI, state, "request_uri_not_supported", "request_uri parameter is not supported")
+		return
+	}
+
 	responseType := r.FormValue("response_type")
 	if responseType != "code" {
 		redirectError(w, r, redirectURI, state, "unsupported_response_type", "only 'code' is supported")
+		return
+	}
+
+	responseMode := r.FormValue("response_mode")
+	if responseMode != "" && responseMode != "query" {
+		redirectError(w, r, redirectURI, state, "invalid_request", fmt.Sprintf("unsupported response_mode: %s", responseMode))
 		return
 	}
 
@@ -256,10 +272,23 @@ func (s *Server) findClient(id string) *Client {
 	return nil
 }
 
+func isLoopbackHost(host string) bool {
+	h := strings.Split(host, ":")[0]
+	return h == "localhost" || h == "127.0.0.1" || h == "[::1]" || h == "::1"
+}
+
 func (s *Server) validRedirectURI(c *Client, uri string) bool {
 	for _, allowed := range c.RedirectURIs {
 		if allowed == uri {
 			return true
+		}
+		// RFC 8252 §7.3: loopback redirects must allow any port
+		allowedU, err1 := url.Parse(allowed)
+		uriU, err2 := url.Parse(uri)
+		if err1 == nil && err2 == nil && isLoopbackHost(allowedU.Host) && isLoopbackHost(uriU.Host) {
+			if allowedU.Scheme == uriU.Scheme && allowedU.Hostname() == uriU.Hostname() && allowedU.Path == uriU.Path {
+				return true
+			}
 		}
 	}
 	return false
@@ -287,23 +316,29 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if client == nil {
 		if basicOk {
 			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+			jsonError(w, "invalid_client", http.StatusUnauthorized)
+		} else {
+			jsonError(w, "invalid_client", http.StatusBadRequest)
 		}
-		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 	isPublicClient := client.Secret == ""
-	if isPublicClient && (basicOk || r.Form.Has("client_secret")) {
+	if isPublicClient && (basicOk || (r.Form.Has("client_secret") && clientSecret != "")) {
 		if basicOk {
 			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+			jsonError(w, "invalid_client", http.StatusUnauthorized)
+		} else {
+			jsonError(w, "invalid_client", http.StatusBadRequest)
 		}
-		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 	if !isPublicClient && client.Secret != clientSecret {
 		if basicOk {
 			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+			jsonError(w, "invalid_client", http.StatusUnauthorized)
+		} else {
+			jsonError(w, "invalid_client", http.StatusBadRequest)
 		}
-		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 
@@ -383,9 +418,29 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate access token first
-	accessToken := GenerateRandomString(32)
-	s.Store.SaveAccessToken(accessToken, AccessTokenData{UserSub: user.Sub, Scope: scope})
+	// Generate JWT access token (RFC 9068)
+	accessTokenExpiry := time.Now().Add(time.Hour)
+	atClaims := jwt.RegisteredClaims{
+		Issuer:    s.Config.Issuer,
+		Subject:   user.Sub,
+		Audience:  jwt.ClaimStrings{clientID},
+		ExpiresAt: jwt.NewNumericDate(accessTokenExpiry),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ID:        GenerateRandomString(16),
+	}
+	atToken := jwt.NewWithClaims(jwt.SigningMethodRS256, struct {
+		jwt.RegisteredClaims
+		Scope    string `json:"scope,omitempty"`
+		ClientID string `json:"client_id"`
+	}{atClaims, scope, clientID})
+	atToken.Header["kid"] = s.KeyPair.KID
+	atToken.Header["typ"] = "at+jwt"
+	accessToken, err := atToken.SignedString(s.KeyPair.PrivateKey)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.Store.SaveAccessToken(accessToken, AccessTokenData{UserSub: user.Sub, ClientID: clientID, Scope: scope, ExpiresAt: accessTokenExpiry})
 
 	// Compute at_hash: SHA-256 hash of access token, left half, base64url-encoded
 	atHashBytes := sha256.Sum256([]byte(accessToken))
@@ -531,16 +586,20 @@ func (s *Server) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 	if client == nil {
 		if basicOk {
 			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+			jsonError(w, "invalid_client", http.StatusUnauthorized)
+		} else {
+			jsonError(w, "invalid_client", http.StatusBadRequest)
 		}
-		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 	isPublicClient := client.Secret == ""
 	if !isPublicClient && client.Secret != clientSecret {
 		if basicOk {
 			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+			jsonError(w, "invalid_client", http.StatusUnauthorized)
+		} else {
+			jsonError(w, "invalid_client", http.StatusBadRequest)
 		}
-		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 
@@ -551,11 +610,13 @@ func (s *Server) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tokenType := r.FormValue("token_type_hint")
-	if tokenType == "refresh_token" {
-		s.Store.RevokeRefreshToken(token)
-	} else {
+	switch tokenType {
+	case "refresh_token":
+		s.Store.RevokeRefreshTokenAndAccessTokens(token)
+		s.Store.RevokeAccessToken(token) // hint fallback: search all types
+	default:
 		s.Store.RevokeAccessToken(token)
-		s.Store.RevokeRefreshToken(token)
+		s.Store.RevokeRefreshTokenAndAccessTokens(token) // search all types
 	}
 
 	w.WriteHeader(http.StatusOK)

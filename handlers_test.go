@@ -413,8 +413,8 @@ func TestTokenEndpoint_InvalidClient(t *testing.T) {
 
 	srv.HandleToken(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -1067,8 +1067,8 @@ func TestTokenEndpoint_PublicClient_SecretRejected(t *testing.T) {
 
 	srv.HandleToken(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for public client with client_secret, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for public client with client_secret, got %d", w.Code)
 	}
 }
 
@@ -1537,8 +1537,8 @@ func TestRevokeEndpoint_NoAuth(t *testing.T) {
 
 	srv.HandleRevoke(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 without client auth, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 without client auth, got %d", w.Code)
 	}
 }
 
