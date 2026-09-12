@@ -31,6 +31,7 @@ type passwordData struct {
 	Scope               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	ResponseMode        string
 	Error               string
 }
 
@@ -48,7 +49,7 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              s.Config.Issuer + "/jwks",
 		"userinfo_endpoint":                     s.Config.Issuer + "/userinfo",
 		"response_types_supported":              []string{"code"},
-		"response_modes_supported":              []string{"query"},
+		"response_modes_supported":              []string{"query", "form_post"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -58,6 +59,9 @@ func (s *Server) HandleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
 		"claims_supported":                      []string{"sub", "iss", "aud", "exp", "iat", "nonce", "email", "email_verified", "name", "at_hash", "azp", "auth_time"},
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
+		"request_parameter_supported":           false,
+		"request_uri_parameter_supported":       false,
+		"claims_parameter_supported":            false,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
@@ -90,18 +94,43 @@ type pickerData struct {
 	Scope               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	ResponseMode        string
 }
 
 func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, state, errCode, errDesc string) {
+	responseMode := r.FormValue("response_mode")
+	params := url.Values{}
+	params.Set("error", errCode)
+	params.Set("error_description", errDesc)
+	if state != "" {
+		params.Set("state", state)
+	}
+	if responseMode == "form_post" {
+		renderFormPost(w, redirectURI, params)
+		return
+	}
 	u, _ := url.Parse(redirectURI)
 	q := u.Query()
-	q.Set("error", errCode)
-	q.Set("error_description", errDesc)
-	if state != "" {
-		q.Set("state", state)
+	for k, vs := range params {
+		for _, v := range vs {
+			q.Set(k, v)
+		}
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+func renderFormPost(w http.ResponseWriter, action string, params url.Values) {
+	w.Header().Set("Content-Type", "text/html;charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	fmt.Fprintf(w, `<!DOCTYPE html><html><body onload="document.forms[0].submit()"><form method="post" action="%s">`, template.HTMLEscapeString(action))
+	for k, vs := range params {
+		for _, v := range vs {
+			fmt.Fprintf(w, `<input type="hidden" name="%s" value="%s">`, template.HTMLEscapeString(k), template.HTMLEscapeString(v))
+		}
+	}
+	fmt.Fprint(w, `<noscript><button type="submit">Continue</button></noscript></form></body></html>`)
 }
 
 func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +171,7 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseMode := r.FormValue("response_mode")
-	if responseMode != "" && responseMode != "query" {
+	if responseMode != "" && responseMode != "query" && responseMode != "form_post" {
 		redirectError(w, r, redirectURI, state, "invalid_request", fmt.Sprintf("unsupported response_mode: %s", responseMode))
 		return
 	}
@@ -177,6 +206,7 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		Scope:               scope,
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
+		ResponseMode:        responseMode,
 	})
 }
 
@@ -194,6 +224,7 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 	scope := r.FormValue("scope")
 	codeChallenge := r.FormValue("code_challenge")
 	codeChallengeMethod := r.FormValue("code_challenge_method")
+	responseMode := r.FormValue("response_mode")
 
 	client := s.findClient(clientID)
 	if client == nil || !s.validRedirectURI(client, redirectURI) {
@@ -220,6 +251,7 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 				Scope:               scope,
 				CodeChallenge:       codeChallenge,
 				CodeChallengeMethod: codeChallengeMethod,
+				ResponseMode:        responseMode,
 			})
 			return
 		}
@@ -234,6 +266,7 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 				Scope:               scope,
 				CodeChallenge:       codeChallenge,
 				CodeChallengeMethod: codeChallengeMethod,
+				ResponseMode:        responseMode,
 				Error:               "Invalid password",
 			})
 			return
@@ -253,11 +286,21 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
+	params := url.Values{}
+	params.Set("code", code)
+	if state != "" {
+		params.Set("state", state)
+	}
+	if responseMode == "form_post" {
+		renderFormPost(w, redirectURI, params)
+		return
+	}
 	u, _ := url.Parse(redirectURI)
 	q := u.Query()
-	q.Set("code", code)
-	if state != "" {
-		q.Set("state", state)
+	for k, vs := range params {
+		for _, v := range vs {
+			q.Set(k, v)
+		}
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)

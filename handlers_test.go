@@ -2346,15 +2346,15 @@ func TestDiscoveryEndpoint_ResponseModesSupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	modes, ok := doc["response_modes_supported"].([]any)
-	if !ok || len(modes) != 1 || modes[0] != "query" {
-		t.Errorf("expected response_modes_supported=[query], got %v", doc["response_modes_supported"])
+	if !ok || len(modes) != 2 || modes[0] != "query" || modes[1] != "form_post" {
+		t.Errorf("expected response_modes_supported=[query, form_post], got %v", doc["response_modes_supported"])
 	}
 }
 
 func TestAuthorizeEndpoint_UnsupportedResponseMode(t *testing.T) {
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&response_mode=form_post", nil)
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&response_mode=fragment", nil)
 	w := httptest.NewRecorder()
 
 	srv.HandleAuthorize(w, req)
