@@ -2097,3 +2097,310 @@ func TestUserinfoEndpoint_BearerLowercase(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestTokenEndpoint_JWTAccessToken(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("jwtcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Scope:       "openid email",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=jwtcode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	accessToken, _ := resp["access_token"].(string)
+	if accessToken == "" {
+		t.Fatal("expected access_token")
+	}
+
+	claims := jwt.MapClaims{}
+	parsed, err := jwt.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {
+		return &srv.KeyPair.PrivateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse/verify access token JWT: %v", err)
+	}
+	if typ, _ := parsed.Header["typ"].(string); typ != "at+jwt" {
+		t.Errorf("expected header typ=at+jwt, got %v", parsed.Header["typ"])
+	}
+	if kid, _ := parsed.Header["kid"].(string); kid != srv.KeyPair.KID {
+		t.Errorf("expected header kid=%s, got %v", srv.KeyPair.KID, parsed.Header["kid"])
+	}
+	if claims["iss"] != "http://localhost:8080" {
+		t.Errorf("expected iss claim, got %v", claims["iss"])
+	}
+	if claims["sub"] != "user1" {
+		t.Errorf("expected sub=user1, got %v", claims["sub"])
+	}
+	aud, ok := claims["aud"].([]any)
+	if !ok || len(aud) != 1 || aud[0] != "default" {
+		t.Errorf("expected aud=[default], got %v", claims["aud"])
+	}
+	if claims["client_id"] != "default" {
+		t.Errorf("expected client_id=default, got %v", claims["client_id"])
+	}
+	if claims["scope"] != "openid email" {
+		t.Errorf("expected scope=openid email, got %v", claims["scope"])
+	}
+	if claims["exp"] == nil {
+		t.Error("expected exp claim")
+	}
+	if claims["iat"] == nil {
+		t.Error("expected iat claim")
+	}
+}
+
+func TestAccessTokenStore_Expiry(t *testing.T) {
+	store := NewStore()
+
+	store.SaveAccessToken("expired", AccessTokenData{
+		UserSub:   "user1",
+		ClientID:  "default",
+		Scope:     "openid",
+		ExpiresAt: time.Now().Add(-time.Minute),
+	})
+	if _, ok := store.GetAccessToken("expired"); ok {
+		t.Error("expected expired access token to be rejected")
+	}
+
+	store.SaveAccessToken("valid", AccessTokenData{
+		UserSub:   "user1",
+		ClientID:  "default",
+		Scope:     "openid",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if _, ok := store.GetAccessToken("valid"); !ok {
+		t.Error("expected non-expired access token to be accepted")
+	}
+}
+
+func TestValidRedirectURI_LoopbackPortFlexibility(t *testing.T) {
+	srv := newTestServer(t)
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "loopback-cli",
+		Secret:       "sec",
+		RedirectURIs: []string{"http://127.0.0.1:8080/callback"},
+	})
+	localhostClient := srv.findClient("default")
+	loopbackClient := srv.findClient("loopback-cli")
+
+	if !srv.validRedirectURI(localhostClient, "http://localhost:9999/callback") {
+		t.Error("expected localhost redirect with different port to be accepted")
+	}
+	if !srv.validRedirectURI(loopbackClient, "http://127.0.0.1:43212/callback") {
+		t.Error("expected 127.0.0.1 redirect with different port to be accepted")
+	}
+	if srv.validRedirectURI(localhostClient, "http://localhost:8080/other") {
+		t.Error("expected different path to be rejected even on loopback")
+	}
+	if srv.validRedirectURI(localhostClient, "http://example.com:8080/callback") {
+		t.Error("expected non-loopback host mismatch to be rejected")
+	}
+}
+
+func TestValidRedirectURI_NonLoopbackRequiresExactMatch(t *testing.T) {
+	srv := newTestServer(t)
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "remote-cli",
+		Secret:       "sec",
+		RedirectURIs: []string{"https://example.com:8080/callback"},
+	})
+	client := srv.findClient("remote-cli")
+
+	if srv.validRedirectURI(client, "https://example.com:9999/callback") {
+		t.Error("expected non-loopback host with different port to be rejected")
+	}
+	if !srv.validRedirectURI(client, "https://example.com:8080/callback") {
+		t.Error("expected exact match to be accepted")
+	}
+}
+
+func TestTokenEndpoint_BasicAuth_InvalidSecret_Revoke(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("token=sometoken")
+	req := httptest.NewRequest("POST", "/revoke", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("default", "wrongsecret")
+	w := httptest.NewRecorder()
+
+	srv.HandleRevoke(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Basic realm="oidc-mock"` {
+		t.Errorf("expected WWW-Authenticate header, got %q", got)
+	}
+}
+
+func TestTokenEndpoint_PublicClient_EmptyClientSecretAccepted(t *testing.T) {
+	srv := newTestServerWithPublicClient(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+	srv.Store.SaveAuthCode("emptysecretcode", AuthCodeData{
+		UserSub:             "user1",
+		ClientID:            "public-cli",
+		RedirectURI:         "http://127.0.0.1:43212/callback",
+		Scope:               "openid",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		ExpiresAt:           time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=emptysecretcode&client_id=public-cli&client_secret=&redirect_uri=http://127.0.0.1:43212/callback&code_verifier=" + verifier)
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for empty client_secret on public client, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRevokeEndpoint_RefreshTokenCascadesToAccessToken(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("cascadecode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Scope:       "openid offline_access",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=cascadecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.HandleToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	accessToken, _ := resp["access_token"].(string)
+	refreshToken, _ := resp["refresh_token"].(string)
+	if accessToken == "" || refreshToken == "" {
+		t.Fatal("expected access_token and refresh_token")
+	}
+
+	// Sanity: access token works before revocation
+	uiReq := httptest.NewRequest("GET", "/userinfo", nil)
+	uiReq.Header.Set("Authorization", "Bearer "+accessToken)
+	uiW := httptest.NewRecorder()
+	srv.HandleUserinfo(uiW, uiReq)
+	if uiW.Code != http.StatusOK {
+		t.Fatalf("expected 200 before revoke, got %d", uiW.Code)
+	}
+
+	revokeForm := strings.NewReader("token=" + refreshToken + "&token_type_hint=refresh_token&client_id=default&client_secret=secret")
+	revokeReq := httptest.NewRequest("POST", "/revoke", revokeForm)
+	revokeReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	revokeW := httptest.NewRecorder()
+	srv.HandleRevoke(revokeW, revokeReq)
+	if revokeW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", revokeW.Code)
+	}
+
+	uiReq2 := httptest.NewRequest("GET", "/userinfo", nil)
+	uiReq2.Header.Set("Authorization", "Bearer "+accessToken)
+	uiW2 := httptest.NewRecorder()
+	srv.HandleUserinfo(uiW2, uiReq2)
+	if uiW2.Code != http.StatusUnauthorized {
+		t.Errorf("expected access token to be invalidated after refresh token revocation, got %d", uiW2.Code)
+	}
+}
+
+func TestDiscoveryEndpoint_ResponseModesSupported(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/.well-known/openid-configuration", nil)
+	w := httptest.NewRecorder()
+	srv.HandleDiscovery(w, req)
+
+	var doc map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	modes, ok := doc["response_modes_supported"].([]any)
+	if !ok || len(modes) != 1 || modes[0] != "query" {
+		t.Errorf("expected response_modes_supported=[query], got %v", doc["response_modes_supported"])
+	}
+}
+
+func TestAuthorizeEndpoint_UnsupportedResponseMode(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&response_mode=form_post", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "invalid_request" {
+		t.Errorf("expected error=invalid_request, got %s", loc.Query().Get("error"))
+	}
+	if loc.Query().Get("state") != "xyz" {
+		t.Errorf("expected state=xyz, got %s", loc.Query().Get("state"))
+	}
+}
+
+func TestAuthorizeEndpoint_RequestParamNotSupported(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&request=xxx", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "request_not_supported" {
+		t.Errorf("expected error=request_not_supported, got %s", loc.Query().Get("error"))
+	}
+}
+
+func TestAuthorizeEndpoint_RequestURIParamNotSupported(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&request_uri=xxx", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "request_uri_not_supported" {
+		t.Errorf("expected error=request_uri_not_supported, got %s", loc.Query().Get("error"))
+	}
+}

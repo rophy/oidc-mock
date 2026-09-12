@@ -222,3 +222,18 @@ func TestEnvVarOverrides(t *testing.T) {
 		t.Errorf("expected port 3333, got %d", cfg.Port)
 	}
 }
+
+func TestLoadConfigRejectsIssuerWithPath(t *testing.T) {
+	t.Setenv("OIDC_CONFIG", `
+issuer: http://localhost:8080/oidc
+clients:
+  - id: app
+    redirect_uris: [http://localhost/cb]
+users:
+  - sub: u1
+`)
+	_, err := LoadConfig("")
+	if err == nil {
+		t.Fatal("expected error for issuer with path component")
+	}
+}

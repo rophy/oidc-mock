@@ -1125,3 +1125,111 @@ func TestRevocationRequiresClientAuth(t *testing.T) {
 		t.Errorf("userinfo after rejected revoke: expected 200, got %d", resp2.StatusCode)
 	}
 }
+
+func TestJWTAccessTokenVerifiesAgainstJWKS(t *testing.T) {
+	tokens := loginAndGetTokens(t, "default", "secret", "openid email")
+	accessToken, ok := tokens["access_token"].(string)
+	if !ok || accessToken == "" {
+		t.Fatal("expected non-empty access_token")
+	}
+
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header map[string]any
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		t.Fatal(err)
+	}
+	if header["typ"] != "at+jwt" {
+		t.Errorf("expected header typ=at+jwt, got %v", header["typ"])
+	}
+	if header["alg"] != "RS256" {
+		t.Errorf("expected header alg=RS256, got %v", header["alg"])
+	}
+	kid, _ := header["kid"].(string)
+	if kid == "" {
+		t.Fatal("expected non-empty kid in header")
+	}
+
+	// Fetch JWKS and find the matching key
+	jwksResp, err := http.Get(baseURL + "/jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jwksResp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(jwksResp.Body).Decode(&jwks); err != nil {
+		t.Fatal(err)
+	}
+	var matched *struct {
+		Kid string `json:"kid"`
+		N   string `json:"n"`
+		E   string `json:"e"`
+	}
+	for i := range jwks.Keys {
+		if jwks.Keys[i].Kid == kid {
+			matched = &jwks.Keys[i]
+			break
+		}
+	}
+	if matched == nil {
+		t.Fatalf("no JWKS key found matching kid=%s", kid)
+	}
+
+	nBytes, err := base64.RawURLEncoding.DecodeString(matched.N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eBytes, err := base64.RawURLEncoding.DecodeString(matched.E)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubKey := &rsa.PublicKey{
+		N: new(big.Int).SetBytes(nBytes),
+		E: int(new(big.Int).SetBytes(eBytes).Int64()),
+	}
+
+	signingInput := []byte(parts[0] + "." + parts[1])
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(signingInput)
+	if err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash[:], signature); err != nil {
+		t.Fatalf("access token signature verification failed: %v", err)
+	}
+
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims["iss"] != baseURL {
+		t.Errorf("expected iss=%s, got %v", baseURL, claims["iss"])
+	}
+	if claims["sub"] != "user1" {
+		t.Errorf("expected sub=user1, got %v", claims["sub"])
+	}
+	if claims["client_id"] != "default" {
+		t.Errorf("expected client_id=default, got %v", claims["client_id"])
+	}
+	if claims["scope"] != "openid email" {
+		t.Errorf("expected scope='openid email', got %v", claims["scope"])
+	}
+}
