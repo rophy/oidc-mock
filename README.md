@@ -11,9 +11,7 @@ Mock OIDC provider for local development. Authorization Code flow with a user pi
 $ docker run --rm -p 8080:8080 ghcr.io/rophy/oidc-mock serve
 ```
 
-Discovery: `http://localhost:8080/.well-known/openid-configuration`
-
-Default config ships one confidential client (`default` / `secret`, redirect URI `http://localhost:8080/callback`) and two users (`user1` Alice with `roles: [admin]`, `user2` Bob with `roles: [viewer]`). Thanks to [loopback port flexibility](#notes), the default client also accepts `http://localhost:<any-port>/callback`. Override with your own config — see [Configuration](#configuration).
+The startup log prints the full default config. Discovery at `http://localhost:8080/.well-known/openid-configuration`. Override defaults — see [Configuration](#configuration).
 
 ## Endpoints
 
