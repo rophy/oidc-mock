@@ -91,6 +91,7 @@ func newServerMux(cfg Config) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", srv.HandleDiscovery)
 	mux.HandleFunc("GET /authorize", srv.HandleAuthorize)
+	mux.HandleFunc("POST /authorize", srv.HandleAuthorize)
 	mux.HandleFunc("POST /authorize/callback", srv.HandleAuthorizeCallback)
 	mux.HandleFunc("POST /token", srv.HandleToken)
 	mux.HandleFunc("GET /jwks", srv.HandleJWKS)
@@ -98,6 +99,7 @@ func newServerMux(cfg Config) (*http.ServeMux, error) {
 	mux.HandleFunc("POST /userinfo", srv.HandleUserinfo)
 	mux.HandleFunc("POST /revoke", srv.HandleRevoke)
 	mux.HandleFunc("GET /end-session", srv.HandleEndSession)
+	mux.HandleFunc("POST /end-session", srv.HandleEndSession)
 
 	return mux, nil
 }

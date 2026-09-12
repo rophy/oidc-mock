@@ -1436,7 +1436,7 @@ func TestRevokeEndpoint_AccessToken(t *testing.T) {
 
 	srv.Store.SaveAccessToken("atok", AccessTokenData{UserSub: "user1", Scope: "openid"})
 
-	form := strings.NewReader("token=atok&token_type_hint=access_token")
+	form := strings.NewReader("token=atok&token_type_hint=access_token&client_id=default&client_secret=secret")
 	req := httptest.NewRequest("POST", "/revoke", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1457,7 +1457,7 @@ func TestRevokeEndpoint_RefreshToken(t *testing.T) {
 
 	srv.Store.SaveRefreshToken("rt1", RefreshTokenData{UserSub: "user1", ClientID: "default", Scope: "openid"})
 
-	form := strings.NewReader("token=rt1&token_type_hint=refresh_token")
+	form := strings.NewReader("token=rt1&token_type_hint=refresh_token&client_id=default&client_secret=secret")
 	req := httptest.NewRequest("POST", "/revoke", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1476,7 +1476,7 @@ func TestRevokeEndpoint_RefreshToken(t *testing.T) {
 func TestRevokeEndpoint_UnknownToken(t *testing.T) {
 	srv := newTestServer(t)
 
-	form := strings.NewReader("token=nonexistent")
+	form := strings.NewReader("token=nonexistent&client_id=default&client_secret=secret")
 	req := httptest.NewRequest("POST", "/revoke", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1494,7 +1494,7 @@ func TestRevokeEndpoint_NoHint(t *testing.T) {
 	srv.Store.SaveAccessToken("atok", AccessTokenData{UserSub: "user1", Scope: "openid"})
 	srv.Store.SaveRefreshToken("atok", RefreshTokenData{UserSub: "user1", ClientID: "default", Scope: "openid"})
 
-	form := strings.NewReader("token=atok")
+	form := strings.NewReader("token=atok&client_id=default&client_secret=secret")
 	req := httptest.NewRequest("POST", "/revoke", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1515,7 +1515,7 @@ func TestRevokeEndpoint_NoHint(t *testing.T) {
 func TestRevokeEndpoint_EmptyToken(t *testing.T) {
 	srv := newTestServer(t)
 
-	form := strings.NewReader("token=")
+	form := strings.NewReader("token=&client_id=default&client_secret=secret")
 	req := httptest.NewRequest("POST", "/revoke", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -1527,10 +1527,25 @@ func TestRevokeEndpoint_EmptyToken(t *testing.T) {
 	}
 }
 
+func TestRevokeEndpoint_NoAuth(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("token=atok")
+	req := httptest.NewRequest("POST", "/revoke", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleRevoke(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without client auth, got %d", w.Code)
+	}
+}
+
 func TestEndSessionEndpoint_Redirect(t *testing.T) {
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:3000/logged-out&state=abc", nil)
+	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:8080/logged-out&state=abc", nil)
 	w := httptest.NewRecorder()
 
 	srv.HandleEndSession(w, req)
@@ -1554,7 +1569,7 @@ func TestEndSessionEndpoint_Redirect(t *testing.T) {
 func TestEndSessionEndpoint_RedirectWithoutState(t *testing.T) {
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:3000/logged-out", nil)
+	req := httptest.NewRequest("GET", "/end-session?post_logout_redirect_uri=http://localhost:8080/logged-out", nil)
 	w := httptest.NewRecorder()
 
 	srv.HandleEndSession(w, req)
@@ -1563,7 +1578,7 @@ func TestEndSessionEndpoint_RedirectWithoutState(t *testing.T) {
 		t.Fatalf("expected 302, got %d", w.Code)
 	}
 	loc := w.Header().Get("Location")
-	if loc != "http://localhost:3000/logged-out" {
+	if loc != "http://localhost:8080/logged-out" {
 		t.Errorf("expected redirect to logout URI without state, got %s", loc)
 	}
 }
@@ -1696,6 +1711,7 @@ func TestTokenEndpoint_IDToken_ContainsAzpAndAuthTime(t *testing.T) {
 		RedirectURI: "http://localhost:8080/callback",
 		Nonce:       "n",
 		Scope:       "openid",
+		AuthTime:    time.Now(),
 		ExpiresAt:   time.Now().Add(60 * time.Second),
 	})
 
@@ -1874,5 +1890,210 @@ func TestTokenEndpoint_ErrorDescriptions(t *testing.T) {
 				t.Errorf("expected error_description containing %q, got %q", tt.wantDesc, resp["error_description"])
 			}
 		})
+	}
+}
+
+func TestAuthorizeEndpoint_PromptNone(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&prompt=none", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "login_required" {
+		t.Errorf("expected error=login_required, got %s", loc.Query().Get("error"))
+	}
+	if loc.Query().Get("state") != "xyz" {
+		t.Errorf("expected state=xyz, got %s", loc.Query().Get("state"))
+	}
+}
+
+func TestAuthorizeEndpoint_POST(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&state=xyz&nonce=abc")
+	req := httptest.NewRequest("POST", "/authorize", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Alice") {
+		t.Error("expected picker rendered with Alice")
+	}
+}
+
+func TestAuthorizeEndpoint_InvalidCodeChallengeMethod(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/authorize?client_id=default&redirect_uri=http://localhost:8080/callback&response_type=code&scope=openid&code_challenge=abc&code_challenge_method=bogus", nil)
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorize(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "invalid_request" {
+		t.Errorf("expected error=invalid_request, got %s", loc.Query().Get("error"))
+	}
+}
+
+func TestAuthorizeCallback_InvalidClient(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("sub=user1&client_id=bogus&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAuthorizeCallback_InvalidRedirectURI(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("sub=user1&client_id=default&redirect_uri=http://evil.com/cb")
+	req := httptest.NewRequest("POST", "/authorize/callback", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleAuthorizeCallback(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestTokenEndpoint_BasicAuth_URLDecoded(t *testing.T) {
+	srv := newTestServer(t)
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "client+id",
+		Secret:       "sec ret!",
+		RedirectURIs: []string{"http://localhost:8080/callback"},
+	})
+
+	srv.Store.SaveAuthCode("urlcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "client+id",
+		RedirectURI: "http://localhost:8080/callback",
+		Scope:       "openid",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=urlcode&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	encoded := base64.StdEncoding.EncodeToString([]byte(url.QueryEscape("client+id") + ":" + url.QueryEscape("sec ret!")))
+	req.Header.Set("Authorization", "Basic "+encoded)
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTokenEndpoint_BasicAuth_WWWAuthenticateHeader(t *testing.T) {
+	srv := newTestServer(t)
+
+	form := strings.NewReader("grant_type=authorization_code&code=x&redirect_uri=http://x")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("default", "wrongsecret")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Basic realm="oidc-mock"` {
+		t.Errorf("expected WWW-Authenticate header, got %q", got)
+	}
+}
+
+func TestTokenEndpoint_AuthTimePreservedOnRefresh(t *testing.T) {
+	srv := newTestServer(t)
+	authTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+
+	srv.Store.SaveAuthCode("authtimecode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Scope:       "openid offline_access",
+		AuthTime:    authTime,
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=authtimecode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.HandleToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	refreshToken, _ := resp["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatal("expected refresh_token in response")
+	}
+
+	refreshForm := strings.NewReader("grant_type=refresh_token&refresh_token=" + refreshToken + "&client_id=default&client_secret=secret")
+	req2 := httptest.NewRequest("POST", "/token", refreshForm)
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w2 := httptest.NewRecorder()
+	srv.HandleToken(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var resp2 map[string]any
+	json.Unmarshal(w2.Body.Bytes(), &resp2)
+	idTokenStr, _ := resp2["id_token"].(string)
+	parsed, err := jwt.Parse(idTokenStr, func(token *jwt.Token) (any, error) {
+		return &srv.KeyPair.PrivateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := parsed.Claims.(jwt.MapClaims)
+	gotAuthTime, ok := claims["auth_time"].(float64)
+	if !ok {
+		t.Fatal("expected auth_time claim in refreshed id_token")
+	}
+	if int64(gotAuthTime) != authTime.Unix() {
+		t.Errorf("expected auth_time=%d (preserved from original login), got %d", authTime.Unix(), int64(gotAuthTime))
+	}
+}
+
+func TestUserinfoEndpoint_BearerLowercase(t *testing.T) {
+	srv := newTestServer(t)
+	srv.Store.SaveAccessToken("atok", AccessTokenData{UserSub: "user1", Scope: "openid"})
+
+	req := httptest.NewRequest("GET", "/userinfo", nil)
+	req.Header.Set("Authorization", "bearer atok")
+	w := httptest.NewRecorder()
+
+	srv.HandleUserinfo(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }

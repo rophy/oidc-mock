@@ -564,6 +564,8 @@ func TestRevocationFlow(t *testing.T) {
 	revokeForm := url.Values{
 		"token":           {accessToken},
 		"token_type_hint": {"access_token"},
+		"client_id":       {"default"},
+		"client_secret":   {"secret"},
 	}
 	resp, err = http.PostForm(baseURL+"/revoke", revokeForm)
 	if err != nil {
@@ -1053,5 +1055,73 @@ func TestScopeFiltering(t *testing.T) {
 	}
 	if _, ok := claims3["email"]; ok {
 		t.Error("expected no email claim with openid+profile scope")
+	}
+}
+
+func TestPromptNoneReturnsLoginRequired(t *testing.T) {
+	page, err := browser.NewPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Close()
+
+	params := url.Values{
+		"client_id":     {"default"},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		"scope":         {"openid"},
+		"state":         {"teststate"},
+		"nonce":         {"testnonce"},
+		"prompt":        {"none"},
+	}
+
+	if _, err := page.Goto(baseURL + "/authorize?" + params.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.WaitForURL("**/callback**"); err != nil {
+		t.Fatal(err)
+	}
+
+	currentURL := page.URL()
+	parsed, err := url.Parse(currentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("error") != "login_required" {
+		t.Errorf("expected error=login_required, got URL: %s", currentURL)
+	}
+	if parsed.Query().Get("state") != "teststate" {
+		t.Errorf("expected state=teststate, got %s", parsed.Query().Get("state"))
+	}
+}
+
+func TestRevocationRequiresClientAuth(t *testing.T) {
+	tokens := loginAndGetTokens(t, "default", "secret", "openid")
+	accessToken := tokens["access_token"].(string)
+
+	revokeForm := url.Values{
+		"token":           {accessToken},
+		"token_type_hint": {"access_token"},
+	}
+	resp, err := http.PostForm(baseURL+"/revoke", revokeForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("revoke without client auth: expected 401, got %d", resp.StatusCode)
+	}
+
+	// Token must still work since revocation was rejected
+	req, _ := http.NewRequest("GET", baseURL+"/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("userinfo after rejected revoke: expected 200, got %d", resp2.StatusCode)
 	}
 }

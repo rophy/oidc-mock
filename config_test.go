@@ -193,6 +193,24 @@ users:
 	}
 }
 
+func TestLoadConfigTrimsTrailingSlashFromIssuer(t *testing.T) {
+	t.Setenv("OIDC_CONFIG", `
+issuer: http://example.com/
+clients:
+  - id: app
+    redirect_uris: [http://localhost/cb]
+users:
+  - sub: u1
+`)
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Issuer != "http://example.com" {
+		t.Errorf("expected trailing slash trimmed from issuer, got %q", cfg.Issuer)
+	}
+}
+
 func TestEnvVarOverrides(t *testing.T) {
 	t.Setenv("OIDC_PORT", "3333")
 

@@ -5,7 +5,7 @@
 
 Mock OIDC provider for local development. Implements the Authorization Code flow with a user picker UI and optional password protection per user.
 
-**Supported features:** public and confidential clients, PKCE (S256 required by default, plain opt-in), optional per-user passwords, refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation (RFC 7009), RP-Initiated Logout, `at_hash`/`azp`/`auth_time`/`email_verified` claims, `client_secret_basic` auth, CORS (browser/SPA compatible).
+**Supported features:** public and confidential clients, PKCE (S256 required by default, plain opt-in), optional per-user passwords, refresh tokens (`offline_access` scope), scope-based claim filtering, token revocation (RFC 7009), RP-Initiated Logout with validated `post_logout_redirect_uris`, `prompt=none` support, `at_hash`/`azp`/`auth_time`/`email_verified` claims, `client_secret_basic` auth, CORS (browser/SPA compatible).
 
 ## Getting Started
 
@@ -76,17 +76,31 @@ clients:
     allow_plain_code_challenge: true
 ```
 
+### RP-Initiated Logout
+
+The `/end-session` endpoint validates `post_logout_redirect_uri` against registered URIs. If not explicitly configured, it falls back to matching the origin (scheme + host) of the client's `redirect_uris`.
+
+```yaml
+clients:
+  - id: my-app
+    secret: my-secret
+    redirect_uris:
+      - http://localhost:3000/callback
+    post_logout_redirect_uris:
+      - http://localhost:3000/logged-out
+```
+
 ### Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/.well-known/openid-configuration` | GET | Discovery document |
-| `/authorize` | GET | Authorization (shows user picker) |
+| `/authorize` | GET/POST | Authorization (shows user picker) |
 | `/token` | POST | Token exchange and refresh (`client_secret_post` or `client_secret_basic`) |
 | `/userinfo` | GET/POST | User claims (Bearer token or form-encoded) |
 | `/jwks` | GET | JSON Web Key Set |
-| `/revoke` | POST | Token revocation (RFC 7009) |
-| `/end-session` | GET | RP-Initiated Logout |
+| `/revoke` | POST | Token revocation (RFC 7009, requires client auth) |
+| `/end-session` | GET/POST | RP-Initiated Logout |
 
 ### docker-compose with inline config
 

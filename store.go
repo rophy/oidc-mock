@@ -15,6 +15,7 @@ type AuthCodeData struct {
 	Scope               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	AuthTime            time.Time
 	ExpiresAt           time.Time
 }
 
@@ -27,6 +28,7 @@ type RefreshTokenData struct {
 	UserSub  string
 	ClientID string
 	Scope    string
+	AuthTime time.Time
 }
 
 type Store struct {

@@ -104,11 +104,16 @@ func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, state, e
 }
 
 func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
-	clientID := r.URL.Query().Get("client_id")
-	redirectURI := r.URL.Query().Get("redirect_uri")
-	state := r.URL.Query().Get("state")
-	nonce := r.URL.Query().Get("nonce")
-	scope := r.URL.Query().Get("scope")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form data", http.StatusBadRequest)
+		return
+	}
+
+	clientID := r.FormValue("client_id")
+	redirectURI := r.FormValue("redirect_uri")
+	state := r.FormValue("state")
+	nonce := r.FormValue("nonce")
+	scope := r.FormValue("scope")
 
 	client := s.findClient(clientID)
 	if client == nil {
@@ -120,16 +125,26 @@ func (s *Server) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responseType := r.URL.Query().Get("response_type")
+	responseType := r.FormValue("response_type")
 	if responseType != "code" {
 		redirectError(w, r, redirectURI, state, "unsupported_response_type", "only 'code' is supported")
 		return
 	}
 
-	codeChallenge := r.URL.Query().Get("code_challenge")
-	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
+	prompt := r.FormValue("prompt")
+	if prompt == "none" {
+		redirectError(w, r, redirectURI, state, "login_required", "prompt=none but no session")
+		return
+	}
+
+	codeChallenge := r.FormValue("code_challenge")
+	codeChallengeMethod := r.FormValue("code_challenge_method")
 	if codeChallenge != "" && codeChallengeMethod == "" {
 		codeChallengeMethod = "plain"
+	}
+	if codeChallenge != "" && codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+		redirectError(w, r, redirectURI, state, "invalid_request", "unsupported code_challenge_method")
+		return
 	}
 	if client.Secret == "" && codeChallenge != "" && codeChallengeMethod == "plain" && !client.AllowPlainCodeChallenge {
 		redirectError(w, r, redirectURI, state, "invalid_request", "public clients must use S256 code_challenge_method")
@@ -163,6 +178,12 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 	scope := r.FormValue("scope")
 	codeChallenge := r.FormValue("code_challenge")
 	codeChallengeMethod := r.FormValue("code_challenge_method")
+
+	client := s.findClient(clientID)
+	if client == nil || !s.validRedirectURI(client, redirectURI) {
+		http.Error(w, "invalid client_id or redirect_uri", http.StatusBadRequest)
+		return
+	}
 
 	user := s.findUser(sub)
 	if user == nil {
@@ -212,6 +233,7 @@ func (s *Server) HandleAuthorizeCallback(w http.ResponseWriter, r *http.Request)
 		Scope:               scope,
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
+		AuthTime:            time.Now(),
 		ExpiresAt:           time.Now().Add(60 * time.Second),
 	})
 
@@ -252,27 +274,41 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	grantType := r.FormValue("grant_type")
 
 	clientID, clientSecret, basicOk := r.BasicAuth()
-	if !basicOk {
+	if basicOk {
+		// RFC 6749 §2.3.1: credentials are application/x-www-form-urlencoded before base64
+		clientID, _ = url.QueryUnescape(clientID)
+		clientSecret, _ = url.QueryUnescape(clientSecret)
+	} else {
 		clientID = r.FormValue("client_id")
 		clientSecret = r.FormValue("client_secret")
 	}
 
 	client := s.findClient(clientID)
 	if client == nil {
+		if basicOk {
+			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+		}
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 	isPublicClient := client.Secret == ""
 	if isPublicClient && (basicOk || r.Form.Has("client_secret")) {
+		if basicOk {
+			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+		}
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 	if !isPublicClient && client.Secret != clientSecret {
+		if basicOk {
+			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+		}
 		jsonError(w, "invalid_client", http.StatusUnauthorized)
 		return
 	}
 
 	var userSub, nonce, scope string
+	var authTime time.Time
 
 	switch grantType {
 	case "authorization_code":
@@ -319,6 +355,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		userSub = codeData.UserSub
 		nonce = codeData.Nonce
 		scope = codeData.Scope
+		authTime = codeData.AuthTime
 
 	case "refresh_token":
 		rt := r.FormValue("refresh_token")
@@ -333,6 +370,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		}
 		userSub = rtData.UserSub
 		scope = rtData.Scope
+		authTime = rtData.AuthTime
 
 	default:
 		jsonError(w, "unsupported_grant_type", http.StatusBadRequest)
@@ -365,7 +403,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		Nonce:    nonce,
 		AtHash:   atHash,
 		Azp:      clientID,
-		AuthTime: jwt.NewNumericDate(now),
+		AuthTime: jwt.NewNumericDate(authTime),
 	}
 	if hasScope(scope, "email") {
 		idTokenClaims.Email = user.Email
@@ -397,6 +435,7 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 			UserSub:  user.Sub,
 			ClientID: clientID,
 			Scope:    scope,
+			AuthTime: authTime,
 		})
 		resp["refresh_token"] = refreshToken
 	}
@@ -429,8 +468,8 @@ func (s *Server) HandleUserinfo(w http.ResponseWriter, r *http.Request) {
 	var token string
 
 	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		token = strings.TrimPrefix(auth, "Bearer ")
+	if len(auth) > 7 && strings.EqualFold(auth[:7], "bearer ") {
+		token = auth[7:]
 	} else if r.Method == http.MethodPost {
 		r.ParseForm()
 		token = r.FormValue("access_token")
@@ -479,6 +518,32 @@ func (s *Server) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientID, clientSecret, basicOk := r.BasicAuth()
+	if basicOk {
+		clientID, _ = url.QueryUnescape(clientID)
+		clientSecret, _ = url.QueryUnescape(clientSecret)
+	} else {
+		clientID = r.FormValue("client_id")
+		clientSecret = r.FormValue("client_secret")
+	}
+
+	client := s.findClient(clientID)
+	if client == nil {
+		if basicOk {
+			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+		}
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
+	isPublicClient := client.Secret == ""
+	if !isPublicClient && client.Secret != clientSecret {
+		if basicOk {
+			w.Header().Set("WWW-Authenticate", `Basic realm="oidc-mock"`)
+		}
+		jsonError(w, "invalid_client", http.StatusUnauthorized)
+		return
+	}
+
 	token := r.FormValue("token")
 	if token == "" {
 		w.WriteHeader(http.StatusOK)
@@ -497,14 +562,24 @@ func (s *Server) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleEndSession(w http.ResponseWriter, r *http.Request) {
-	redirectURI := r.URL.Query().Get("post_logout_redirect_uri")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form data", http.StatusBadRequest)
+		return
+	}
+
+	redirectURI := r.FormValue("post_logout_redirect_uri")
 	if redirectURI == "" {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("logged out"))
 		return
 	}
 
-	state := r.URL.Query().Get("state")
+	if !s.validPostLogoutURI(redirectURI) {
+		http.Error(w, "invalid post_logout_redirect_uri", http.StatusBadRequest)
+		return
+	}
+
+	state := r.FormValue("state")
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		http.Error(w, "invalid post_logout_redirect_uri", http.StatusBadRequest)
@@ -516,6 +591,31 @@ func (s *Server) HandleEndSession(w http.ResponseWriter, r *http.Request) {
 		u.RawQuery = q.Encode()
 	}
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+func (s *Server) validPostLogoutURI(uri string) bool {
+	for _, c := range s.Config.Clients {
+		for _, allowed := range c.PostLogoutRedirectURIs {
+			if allowed == uri {
+				return true
+			}
+		}
+		// Fall back to matching redirect_uris origin for convenience
+		for _, allowed := range c.RedirectURIs {
+			allowedParsed, err := url.Parse(allowed)
+			if err != nil {
+				continue
+			}
+			uriParsed, err := url.Parse(uri)
+			if err != nil {
+				continue
+			}
+			if allowedParsed.Scheme == uriParsed.Scheme && allowedParsed.Host == uriParsed.Host {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func jsonError(w http.ResponseWriter, errCode string, status int, description ...string) {

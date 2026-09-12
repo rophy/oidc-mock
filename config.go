@@ -21,10 +21,11 @@ type Config struct {
 }
 
 type Client struct {
-	ID                    string   `yaml:"id"`
-	Secret                string   `yaml:"secret"`
-	RedirectURIs          []string `yaml:"redirect_uris"`
-	AllowPlainCodeChallenge bool   `yaml:"allow_plain_code_challenge"`
+	ID                      string   `yaml:"id"`
+	Secret                  string   `yaml:"secret"`
+	RedirectURIs            []string `yaml:"redirect_uris"`
+	PostLogoutRedirectURIs  []string `yaml:"post_logout_redirect_uris"`
+	AllowPlainCodeChallenge bool     `yaml:"allow_plain_code_challenge"`
 }
 
 type User struct {
@@ -103,6 +104,8 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+
+	cfg.Issuer = strings.TrimSuffix(cfg.Issuer, "/")
 
 	if v := os.Getenv("OIDC_PORT"); v != "" {
 		var port int
