@@ -113,12 +113,3 @@ Or mount a file: `OIDC_CONFIG_FILE: /config.yaml` with a volume.
 - **`prompt=none`** always returns `login_required` (no server-side session). Use `offline_access` scope with refresh tokens for token renewal.
 - **CORS** headers are set on all endpoints (`Access-Control-Allow-Origin: *`) for SPA compatibility.
 
-## Building from source
-
-```bash
-go run . serve
-go run . serve --config config.yaml
-go run . help
-```
-
-Image published to `ghcr.io/rophy/oidc-mock`, tagged `latest` and `yyyymmdd-<hash>` on each push to master.
