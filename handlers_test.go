@@ -2296,6 +2296,58 @@ func TestValidRedirectURI_LoopbackPortFlexibility(t *testing.T) {
 	}
 }
 
+func TestValidRedirectURI_WildcardSupport(t *testing.T) {
+	srv := newTestServer(t)
+
+	// "*" matches any URI
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "wildcard-all",
+		Secret:       "sec",
+		RedirectURIs: []string{"*"},
+	})
+	allClient := srv.findClient("wildcard-all")
+	if !srv.validRedirectURI(allClient, "https://anything.example.com/callback") {
+		t.Error("expected '*' to match any URI")
+	}
+	if !srv.validRedirectURI(allClient, "http://localhost:3000/auth") {
+		t.Error("expected '*' to match localhost URI")
+	}
+
+	// Suffix wildcard matches prefix
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "wildcard-suffix",
+		Secret:       "sec",
+		RedirectURIs: []string{"https://example.com/*"},
+	})
+	suffixClient := srv.findClient("wildcard-suffix")
+	if !srv.validRedirectURI(suffixClient, "https://example.com/callback") {
+		t.Error("expected suffix wildcard to match path under prefix")
+	}
+	if !srv.validRedirectURI(suffixClient, "https://example.com/deep/nested/path") {
+		t.Error("expected suffix wildcard to match deep path")
+	}
+	if srv.validRedirectURI(suffixClient, "https://evil.com/https://example.com/callback") {
+		t.Error("expected suffix wildcard to reject different origin")
+	}
+	if srv.validRedirectURI(suffixClient, "http://example.com/callback") {
+		t.Error("expected suffix wildcard to reject different scheme")
+	}
+
+	// Wildcard with scheme prefix
+	srv.Config.Clients = append(srv.Config.Clients, Client{
+		ID:           "wildcard-scheme",
+		Secret:       "sec",
+		RedirectURIs: []string{"http://localhost:*"},
+	})
+	schemeClient := srv.findClient("wildcard-scheme")
+	if !srv.validRedirectURI(schemeClient, "http://localhost:3000/callback") {
+		t.Error("expected scheme+host wildcard to match any port and path")
+	}
+	if srv.validRedirectURI(schemeClient, "https://localhost:3000/callback") {
+		t.Error("expected scheme+host wildcard to reject different scheme")
+	}
+}
+
 func TestValidRedirectURI_NonLoopbackRequiresExactMatch(t *testing.T) {
 	srv := newTestServer(t)
 	srv.Config.Clients = append(srv.Config.Clients, Client{

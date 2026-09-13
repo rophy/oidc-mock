@@ -321,6 +321,12 @@ func isLoopbackHost(hostname string) bool {
 
 func (s *Server) validRedirectURI(c *Client, uri string) bool {
 	for _, allowed := range c.RedirectURIs {
+		if allowed == "*" {
+			return true
+		}
+		if strings.HasSuffix(allowed, "*") && strings.HasPrefix(uri, allowed[:len(allowed)-1]) {
+			return true
+		}
 		if allowed == uri {
 			return true
 		}

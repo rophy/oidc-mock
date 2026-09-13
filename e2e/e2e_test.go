@@ -50,6 +50,10 @@ clients:
   - id: public-cli
     redirect_uris:
       - %s
+  - id: wildcard-app
+    secret: wildsecret
+    redirect_uris:
+      - %s/*
 users:
   - sub: user1
     email: alice@example.com
@@ -64,7 +68,7 @@ users:
     name: Carol
     password: pass123
     roles: [editor]
-`, baseURL, redirectURI, redirectURI)
+`, baseURL, redirectURI, redirectURI, baseURL)
 
 	coverDir := os.Getenv("GOCOVERDIR")
 	env := map[string]string{"OIDC_CONFIG": oidcConfig}
@@ -269,6 +273,80 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	if tokenResp["token_type"] != "Bearer" {
 		t.Errorf("expected token_type=Bearer, got %v", tokenResp["token_type"])
+	}
+}
+
+func TestWildcardRedirectURI(t *testing.T) {
+	page, err := browser.NewPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Close()
+
+	// Use a redirect_uri that wasn't explicitly registered but matches the wildcard
+	wildcardRedirect := baseURL + "/some/other/path"
+
+	params := url.Values{
+		"client_id":     {"wildcard-app"},
+		"redirect_uri":  {wildcardRedirect},
+		"response_type": {"code"},
+		"scope":         {"openid"},
+		"state":         {"wildstate"},
+		"nonce":         {"wildnonce"},
+	}
+	_, err = page.Goto(baseURL + "/authorize?" + params.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	aliceButton := page.Locator("button.user-card:has-text('Alice')")
+	if err := aliceButton.Click(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := page.WaitForURL("**/some/other/path**"); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := url.Parse(page.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatalf("expected code in URL, got: %s", page.URL())
+	}
+
+	if parsed.Query().Get("state") != "wildstate" {
+		t.Errorf("expected state=wildstate, got %s", parsed.Query().Get("state"))
+	}
+
+	// Exchange code for tokens
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {"wildcard-app"},
+		"client_secret": {"wildsecret"},
+		"redirect_uri":  {wildcardRedirect},
+	}
+	resp, err := http.PostForm(baseURL+"/token", tokenForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("token exchange: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var tokenResp map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		t.Fatal(err)
+	}
+	if tokenResp["access_token"] == nil || tokenResp["access_token"] == "" {
+		t.Error("expected non-empty access_token")
 	}
 }
 
