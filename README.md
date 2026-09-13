@@ -3,7 +3,7 @@
 [![CI](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml/badge.svg)](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml)
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/rophy/dbb4822dbc5782d5563947adde3358d3/raw/oidc-mock-coverage.json)](https://github.com/rophy/oidc-mock/actions/workflows/ci.yaml)
 
-Mock OIDC provider for local development. Authorization Code flow with a user picker UI, JWT access tokens, and no external dependencies.
+Mock OIDC provider for local development.
 
 ## Quick Start
 
@@ -63,11 +63,11 @@ users:
 
 ### Scopes
 
-| Scope | Claims |
+| Scope | Effect |
 |-------|--------|
-| `openid` | `sub` |
-| `email` | `email`, `email_verified` |
-| `profile` | `name` + custom claims |
+| `openid` | returns an ID token |
+| `email` | adds `email`, `email_verified` to ID token and userinfo |
+| `profile` | adds `name` + custom claims to ID token and userinfo |
 | `offline_access` | enables refresh token |
 
 ### Client authentication
