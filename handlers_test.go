@@ -264,6 +264,75 @@ func TestTokenEndpoint_ValidExchange(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_NoOpenIDScope_NoIDToken(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveAuthCode("testcode", AuthCodeData{
+		UserSub:     "user1",
+		ClientID:    "default",
+		RedirectURI: "http://localhost:8080/callback",
+		Scope:       "email profile",
+		ExpiresAt:   time.Now().Add(60 * time.Second),
+	})
+
+	form := strings.NewReader("grant_type=authorization_code&code=testcode&client_id=default&client_secret=secret&redirect_uri=http://localhost:8080/callback")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("expected access_token")
+	}
+	if _, ok := resp["id_token"]; ok {
+		t.Error("expected no id_token when openid scope is not requested")
+	}
+}
+
+func TestTokenEndpoint_RefreshToken_NoOpenIDScope_NoIDToken(t *testing.T) {
+	srv := newTestServer(t)
+
+	srv.Store.SaveRefreshToken("rt1", RefreshTokenData{
+		UserSub:  "user1",
+		ClientID: "default",
+		Scope:    "offline_access",
+	})
+
+	form := strings.NewReader("grant_type=refresh_token&refresh_token=rt1&client_id=default&client_secret=secret")
+	req := httptest.NewRequest("POST", "/token", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.HandleToken(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("expected access_token")
+	}
+	if resp["refresh_token"] == nil || resp["refresh_token"] == "" {
+		t.Error("expected new refresh_token")
+	}
+	if _, ok := resp["id_token"]; ok {
+		t.Error("expected no id_token when openid scope is not requested")
+	}
+}
+
 func TestTokenEndpoint_RefreshToken(t *testing.T) {
 	srv := newTestServer(t)
 

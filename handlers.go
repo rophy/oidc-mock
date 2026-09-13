@@ -488,46 +488,47 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.SaveAccessToken(accessToken, AccessTokenData{UserSub: user.Sub, ClientID: clientID, Scope: scope, ExpiresAt: accessTokenExpiry})
 
-	// Compute at_hash: SHA-256 hash of access token, left half, base64url-encoded
-	atHashBytes := sha256.Sum256([]byte(accessToken))
-	atHash := base64.RawURLEncoding.EncodeToString(atHashBytes[:16])
-
-	now := time.Now()
-	idTokenClaims := IDTokenClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    s.Config.Issuer,
-			Subject:   user.Sub,
-			Audience:  jwt.ClaimStrings{clientID},
-			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(now),
-		},
-		Nonce:    nonce,
-		AtHash:   atHash,
-		Azp:      clientID,
-		AuthTime: jwt.NewNumericDate(authTime),
-	}
-	if hasScope(scope, "email") {
-		idTokenClaims.Email = user.Email
-		v := true
-		idTokenClaims.EmailVerified = &v
-	}
-	if hasScope(scope, "profile") {
-		idTokenClaims.Name = user.Name
-		idTokenClaims.Custom = user.Claims
-	}
-
-	idToken, err := s.KeyPair.SignIDToken(idTokenClaims)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
 	resp := map[string]any{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
 		"expires_in":   3600,
-		"id_token":     idToken,
 		"scope":        scope,
+	}
+
+	if hasScope(scope, "openid") {
+		atHashBytes := sha256.Sum256([]byte(accessToken))
+		atHash := base64.RawURLEncoding.EncodeToString(atHashBytes[:16])
+
+		now := time.Now()
+		idTokenClaims := IDTokenClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    s.Config.Issuer,
+				Subject:   user.Sub,
+				Audience:  jwt.ClaimStrings{clientID},
+				ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+				IssuedAt:  jwt.NewNumericDate(now),
+			},
+			Nonce:    nonce,
+			AtHash:   atHash,
+			Azp:      clientID,
+			AuthTime: jwt.NewNumericDate(authTime),
+		}
+		if hasScope(scope, "email") {
+			idTokenClaims.Email = user.Email
+			v := true
+			idTokenClaims.EmailVerified = &v
+		}
+		if hasScope(scope, "profile") {
+			idTokenClaims.Name = user.Name
+			idTokenClaims.Custom = user.Claims
+		}
+
+		idToken, err := s.KeyPair.SignIDToken(idTokenClaims)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		resp["id_token"] = idToken
 	}
 
 	if hasScope(scope, "offline_access") {
