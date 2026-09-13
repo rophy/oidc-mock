@@ -1,12 +1,16 @@
 BINARY := oidc-mock
 
+.DEFAULT_GOAL := help
+
 .PHONY: build unit-test e2e-test test lint clean help
 
 build: ## Build the binary
 	go build -o $(BINARY) .
 
-unit-test: ## Run unit and integration tests with coverage
-	go test -v -cover ./...
+unit-test: ## Run unit tests with coverage
+	go test -v -coverprofile=coverage.out ./...
+	@go tool cover -func=coverage.out | tail -1
+	@rm -f coverage.out
 
 e2e-test: ## Run Playwright e2e tests via Docker with coverage
 	@mkdir -p /tmp/oidc-mock-e2e-coverdir
